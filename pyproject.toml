@@ -27,7 +27,7 @@ classifiers = [
 # Runtime dependencies — kept minimal at setup phase.
 # New deps are added as their owning phase lands (ingestion, detection, rca, llm, ...).
 dependencies = [
-    "pydantic>=2.6,<3",
+    "pydantic>=2.13.5,<3",
 ]
 
 [project.optional-dependencies]
