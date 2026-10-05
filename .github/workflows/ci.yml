@@ -1,0 +1,80 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PY_VERSION: "3.11"
+
+jobs:
+  lint:
+    name: lint (ruff + mypy)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PY_VERSION }}
+          cache: pip
+
+      - name: Install (lint-only subset)
+        run: |
+          python -m pip install --upgrade pip
+          pip install "ruff>=0.4" "mypy>=1.10"
+
+      - name: Ruff check
+        run: ruff check src tests
+
+      - name: Ruff format --check
+        run: ruff format --check src tests
+
+      - name: mypy
+        run: mypy src
+
+  test:
+    name: test (unit)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ env.PY_VERSION }}
+          cache: pip
+
+      - name: Install (with dev extras)
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]"
+
+      - name: Pytest
+        run: pytest -q
+
+  dockerfile-lint:
+    name: dockerfile syntax check
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install hadolint
+        run: |
+          sudo wget -O /usr/local/bin/hadolint \
+            https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
+          sudo chmod +x /usr/local/bin/hadolint
+
+      - name: Lint Dockerfile
+        run: hadolint Dockerfile || true  # don't block Step 0; tighten in phase 9
+        continue-on-error: true

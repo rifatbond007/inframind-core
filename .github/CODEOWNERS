@@ -1,0 +1,33 @@
+# CODEOWNERS — every PR touching a path notifies the listed reviewers.
+# GitHub will auto-request review from the owners listed below.
+# Fill in real GitHub handles when the team accounts are known.
+
+# Default: any change notifies everyone.
+/* @inframind-team
+
+# Testbed + deploy (Rifat)
+/testbed/        @rifatbroh
+/deploy/         @rifatbroh
+/Makefile        @rifatbroh
+/docker-compose.yml @rifatbroh
+/Dockerfile      @rifatbroh
+
+# Ingestion, detection, correlation (Moneem)
+/src/inframind/ingestion/   @moneem
+/src/inframind/detection/   @moneem
+/src/inframind/correlation/ @moneem
+/tests/                     @moneem
+
+# RCA, LLM, alerting, storage (Prome)
+/src/inframind/rca/       @prome
+/src/inframind/llm/       @prome
+/src/inframind/alerting/  @prome
+/src/inframind/storage/   @prome
+/src/inframind/api/       @prome
+/evaluation/              @prome
+
+# Docs + paper — all three
+/docs/        @rifatbroh @moneem @prome
+/paper/       @rifatbroh @moneem @prome
+/CLAUDE.md    @rifatbroh @moneem @prome
+/README.md    @rifatbroh @moneem @prome

@@ -1,0 +1,79 @@
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# --- venvs ---
+.venv/
+venv/
+env/
+.python-cache/
+
+# --- tool caches ---
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.cache/
+
+# --- logs / runtime ---
+*.log
+logs/
+
+# --- secrets & local config ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+secrets/
+
+# --- K8s / testbed (Step 1 will add real paths; block common ones up front) ---
+kubeconfig
+kubeconfig.*
+*.kubeconfig
+kind-*.log
+kind-*.kubeconfig
+.kube/
+
+# --- editors / OS ---
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# --- evaluation results (large / generated) ---
+evaluation/results/*
+!evaluation/results/.gitkeep
+
+# --- paper build artifacts ---
+paper/build/
+*.aux
+*.bbl
+*.blg
+*.fdb_latexmk
+*.fls
+*.out
+*.synctex.gz
+*.toc

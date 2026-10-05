@@ -1,0 +1,54 @@
+# InfraMind — local dev stack.
+# Step 0: only Redis (event bus) and PostgreSQL (incident store).
+#
+# Why these two and nothing else:
+#   * The K8s testbed (kind, Prometheus, Loki, Jaeger, Chaos Mesh, Online Boutique)
+#     is provisioned in Step 1 via `make up` and lives under testbed/.
+#   * InfraMind services run locally via `uvicorn` during development, or from the
+#     project Dockerfile once Step 8 lands.
+#
+# Usage:
+#   make up     # start
+#   make down   # stop + remove volumes
+#   make logs   # tail
+
+services:
+  redis:
+    image: redis:7-alpine
+    container_name: inframind-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: inframind-postgres
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-inframind}
+      POSTGRES_USER: ${POSTGRES_USER:-inframind}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-inframind}
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - 'pg_isready -U "$${POSTGRES_USER:-inframind}" -d "$${POSTGRES_DB:-inframind}"'
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+
+volumes:
+  redis-data:
+  postgres-data:

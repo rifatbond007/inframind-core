@@ -1,0 +1,13 @@
+# Example override file for ad-hoc local tweaks.
+# Copy to `docker-compose.override.yml` (gitignored by .gitignore? — add it locally if needed)
+# to change ports, mounts, or env without touching the committed base.
+#
+# Use case: developer wants Prometheus exposed on a different port while debugging.
+#
+# services:
+#   redis:
+#     ports:
+#       - "6380:6379"   # host:container
+#   postgres:
+#     environment:
+#       POSTGRES_PASSWORD: dev-only-password
