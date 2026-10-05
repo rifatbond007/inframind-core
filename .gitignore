@@ -4,8 +4,8 @@ __pycache__/
 *$py.class
 *.so
 .Python
-build/
-develop-eggs/
+/build/                       # root only — setup.py / pip build artifacts
+/develop-eggs/
 dist/
 downloads/
 eggs/
