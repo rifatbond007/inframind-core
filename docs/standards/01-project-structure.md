@@ -101,7 +101,7 @@ The agents produce the code; the code does the work.
 ## 1.6 Hard rules
 
 - **No new top-level directory without a D-number.** Anything that wants `benchmarks/`, `data/`,
-  `models/`, `notebooks/` at the repo root needs a new entry in `docs/DECISIONS.md` and supervisor
+  `models/`, `notebooks/` at the repo root needs a new entry in `docs/decision-tree.md` (change log) and supervisor
   sign-off. `evaluation/notebooks/` exists as an exception (locked in P7).
 - **The dependency DAG is a hard rule.** If you need an upstream dependency that creates a cycle,
   fix the design — do not relax the rule.

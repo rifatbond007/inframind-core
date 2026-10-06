@@ -77,7 +77,7 @@ left-to-right through the categories; every phase has a phase-gate
 
 | Agent | Role | Phase |
 |---|---|---|
-| `project-planner` | Owns the phase plan, scheduling, and dependency map. Reads `CLAUDE.md`, `PROGRESS.md`, `DECISIONS.md`. | every |
+| `project-planner` | Owns the phase plan, scheduling, and dependency map. Reads `CLAUDE.md`, `docs/PROGRESS.md`, `docs/decision-tree.md`. | every |
 | `architect` | Owns the five-stage pipeline design, module boundaries, and interface contracts between stages. | every |
 
 **build/** — code under `src/inframind/<area>/`
@@ -114,11 +114,11 @@ left-to-right through the categories; every phase has a phase-gate
 | `literature-scout` | Surveys published work on observability, anomaly detection, RCA, and LLM-assisted diagnosis. Maintains references and related-work sections. | P9 |
 | `paper-writer` | Drafts the research paper in IEEE conference LaTeX. | P9 |
 | `paper-reviewer` | Reviews the draft before submission — number provenance, citation accuracy, novelty claim, D1–D9 compliance. | P9 |
-| `docs-writer` | Maintains in-repo documentation (README, ARCHITECTURE, REPO_LAYOUT, CONTRIBUTING, PROGRESS, DECISIONS). | every |
+| `docs-writer` | Maintains in-repo documentation (README, ARCHITECTURE, REPO_LAYOUT, CONTRIBUTING, PROGRESS, decision-tree). | every |
 | `reference-verifier` | Verifies every reference in `paper/references.bib` and `proposal.pdf`. Removes anything that cannot be confirmed. | P9 |
 
 Full per-agent contract (scope, hard rules, output style) lives in
-`.claude/agents/<category>/<name>.md`. Pair with `.claude/skills/` for procedural how-to —
+`.claude/agents/<category>/<name>.md`. Pair with `.claude/skills/` for task entrypoints (each skill points at `docs/standards/`) —
 e.g. `add-collector`, `phase-gates`, `commit-protocol`, `run-evaluation`,
 `paper-writing`, `reference-verification`.
 
@@ -126,9 +126,9 @@ e.g. `add-collector`, `phase-gates`, `commit-protocol`, `run-evaluation`,
 
 - `CLAUDE.md` — project memory, locked design decisions, repo layout, agent & skill index. Read this first.
 - `docs/PROGRESS.md` — phase checklist and session-by-session log.
-- `docs/DECISIONS.md` — decision log (ADR-lite), including proposed deviations from the original proposal.
-- `docs/decision-tree.md` — locked decisions (WHAT and WHY) — the source of truth for the project's shape.
+- `docs/decision-tree.md` — locked decisions (WHAT and WHY), change log (ADR-lite), and proposal deltas — single source of truth.
 - `docs/surface-map.md` — signals-in / incidents-out / env keys / upstream contract.
+- `docs/AGENT_WORKFLOW.md` — how agents, skills, and standards relate (read before delegating work).
 - `docs/standards/` — engineering conventions handbook. 12 numbered files (project structure, Python, signal schema, collectors, detectors, RCA, LLM, commits, testbed, evaluation, Helm, paper) + a README index. Pairs with `.claude/skills/`.
 - `docs/ARCHITECTURE.md` — five-stage pipeline overview.
 - `docs/REPO_LAYOUT.md` — what each directory is for.

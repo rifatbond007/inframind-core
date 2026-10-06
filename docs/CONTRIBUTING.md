@@ -2,19 +2,18 @@
 
 ## Branching
 
-Use one of these prefixes:
+Only **five** branch names are used. Do not create topic branches (`feat/…`, `fix/…`, etc.).
 
-| Prefix      | Purpose                          | Example                       |
-|-------------|----------------------------------|-------------------------------|
-| `feat/`     | new functionality                | `feat/rca-pagerank-variant`   |
-| `fix/`      | bug fix                          | `fix/dedup-window-off-by-one` |
-| `docs/`     | docs only (no code change)       | `docs/architecture-diagram`   |
-| `refactor/` | no behavior change               | `refactor/detector-factory`   |
-| `eval/`     | evaluation harness / scenario    | `eval/scenario-pod-kill`      |
-| `paper/`    | paper / LaTeX only               | `paper/related-work-section`  |
-| `chore/`    | tooling, CI, deps                | `chore/bump-ruff`             |
+| Branch | Use |
+|--------|-----|
+| `main` | Protected; release / milestone snapshots. No direct commits. |
+| `dev` | Team integration before `main`. |
+| `dev-rifat` | Rifat — testbed, evaluation, packaging. |
+| `dev-moneem` | Moneem — ingestion, detection, correlation. |
+| `dev-prome` | Prome — RCA, LLM, alerting, storage, API. |
 
-Keep branches short-lived (< 5 days, ideally). Delete them after merge.
+Work on your `dev-*` branch, open PRs to `dev`, then `dev` → `main` when ready. See
+`.claude/skills/commit-protocol/SKILL.md` and `docs/standards/08-commit-protocol.md`.
 
 ## Commits
 
@@ -24,8 +23,6 @@ Keep branches short-lived (< 5 days, ideally). Delete them after merge.
 <type>(<scope>): <short summary>
 
 <body (optional, wrap at 72 cols)>
-
-<footer (optional)>
 ```
 
 Examples:
@@ -34,17 +31,17 @@ Examples:
 - `fix(detection): freeze baseline while incident is open`
 - `docs(progress): log Step 0 completion`
 
-No direct commits to `main` — pre-commit hook will block them. If you somehow
-see a direct commit, reset it and re-do as a PR.
+The author shown on GitHub is the commit author. Do not add `GitHub-Author:` or
+`Co-authored-by:` trailers. No direct commits to `main` — the pre-commit hook blocks them.
 
 ## Pull requests
 
-1. Branch from `main`.
-2. Push and open a PR. The `ci` workflow runs `lint` and `test` jobs.
+1. Push your `dev-*` (or `dev`) branch and open a PR toward `dev` or `main` as appropriate.
+2. The `ci` workflow runs `lint` and `test` jobs.
 3. Auto-requested reviewers come from `.github/CODEOWNERS` — at least one approval
    from the relevant owner is required.
-4. Address review comments in new commits (don't force-push during review).
-5. Squash-merge once CI is green and approvals are in. Linear history is enforced.
+4. Address review comments in new commits (don't force-push to `dev`/`main` during review).
+5. Squash-merge once CI is green and approvals are in. Linear history is enforced on `main`.
 
 ## Local pre-flight
 
@@ -78,4 +75,4 @@ The `.gitignore` blocks the obvious cases, but you are the last line of defense.
 
 Per `CLAUDE.md` hard rules: anything that touches RCA, detection, or evaluation
 **must be reproducible from a scenario id + seed**. Add the scenario under
-`evaluation/scenarios/` and document the seed.
+`evaluation/scenarios/` when the harness exists (Phase P7).

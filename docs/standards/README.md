@@ -38,7 +38,7 @@ symbol. Applies to every doc in `docs/`.
 | 5 | [Add a detector](05-add-detector.md) | `update()` per-signal stateful, `freeze()` / `unfreeze()` for incident lifecycle (D4). State is per-service. Tune thresholds on dev split, report on test split. |
 | 6 | [RCA scoring](06-rca-scoring.md) | Deterministic ranking. Edges `caller -> callee`. Walk from symptom toward callees (D2). Same `(graph, anomaly_set)` produces the same score — regardless of LLM version. |
 | 7 | [LLM explainer](07-llm-explainer.md) | LLM summarises evidence; the graph decides (D1). Validator rejects claims citing missing evidence IDs. Redact secrets/PII before any text leaves the process (D9). Ollama is the local fallback. `temperature=0`. |
-| 8 | [Commit protocol](08-commit-protocol.md) | Conventional Commits. Branch prefixes `feat/` `fix/` `docs/` `refactor/` `eval/` `paper/` `chore/`. Linear history, squash-merge. Direct commits to `main` blocked by pre-commit hook. |
+| 8 | [Commit protocol](08-commit-protocol.md) | Conventional Commits. Branches: `main`, `dev`, `dev-rifat`, `dev-moneem`, `dev-prome` only. Linear history, squash-merge. Direct commits to `main` blocked by pre-commit hook. |
 | 9 | [Testbed ops](09-testbed-ops.md) | `make up` brings up the stack in order; `make down` tears it down. `kubectl`/`helm` only against `kind-*` contexts. Never against the default context. Smoke check before trusting the testbed. |
 | 10 | [Evaluation](10-evaluation.md) | `make eval SCENARIO=<id>`. ≥12 scenarios x 5 reps + fault-free soak (D6). 6 baselines (D7). Dev/test split — never tune on test. Every scenario has `seed`. |
 | 11 | [Helm packaging](11-helm-packaging.md) | `deploy/helm/inframind/`. No real secrets in `values.yaml`. Read-only RBAC. `helm lint` before commit. |
@@ -54,7 +54,7 @@ symbol. Applies to every doc in `docs/`.
 2. **[`../decision-tree.md`](../decision-tree.md)** — locked decisions; the source of WHAT and WHY.
 3. **[`CLAUDE.md`](../../CLAUDE.md)** — hard rules, team table, agent index.
 4. **This set** — how the code is written.
-5. **[`.claude/skills/`](../../SKILL.md)** — agent-callable procedural detail.
+5. **[`.claude/skills/`](../../.claude/skills/)** — agent entrypoints; procedural detail lives in this standards set.
 6. **`.claude/agents/<category>/<name>.md`** — per-agent scope and output style.
 
 A skill that disagrees with a file here loses. A file here that disagrees with `decision-tree.md`
@@ -96,7 +96,7 @@ Universal terms. Domain vocabulary stays in the relevant section.
 | **Scenario** | A YAML under `evaluation/scenarios/<id>/scenario.yaml`. Reproducible from `scenario_id + seed`. |
 | **Baseline** | A ranker alternative compared against InfraMind's ranker in the paper (D7). |
 | **Reproduction seed** | The `seed` field on every scenario. Required. |
-| **Hard rule** | A rule that cannot be overridden without supervisor sign-off and a new entry in `DECISIONS.md`. |
+| **Hard rule** | A rule that cannot be overridden without supervisor sign-off and a new entry in `docs/decision-tree.md` (change log). |
 | **Soft rule** | A convention. May be deviated from with a comment explaining why. |
 
 ---

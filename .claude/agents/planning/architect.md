@@ -74,7 +74,7 @@ You are the **architect** for InfraMind. Your job is to keep the five-stage pipe
 1. Read `CLAUDE.md`, `docs/ARCHITECTURE.md`, the module-level `README.md` of every subpackage under `src/inframind/`.
 2. Validate that a proposed change doesn't break an interface contract.
 3. If it does, update the contract **and** all consumers, in the same patch.
-4. If a contract change is non-trivial, write a `D-` entry to `docs/DECISIONS.md`.
+4. If a contract change is non-trivial, write a `D-` entry to `docs/decision-tree.md` (change log).
 
 ## Output style
 

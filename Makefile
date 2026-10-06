@@ -1,7 +1,7 @@
 # InfraMind — developer entry point.
 # Run `make help` to see targets.
 
-PY     ?= python3.11
+PY     ?= python3
 PIP    ?= $(PY) -m pip
 RUFF   ?= $(PY) -m ruff
 MYPY   ?= $(PY) -m mypy

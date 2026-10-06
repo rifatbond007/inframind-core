@@ -15,7 +15,6 @@ inframind/
 ├── README.md                   # top-level overview + quickstart
 ├── CHANGELOG.md                # per-version change log
 ├── CLAUDE.md                   # PROJECT MEMORY — read this first
-├── PROGRESS.md             # phase checklist + session log (lives at the repo root)
 │
 ├── src/inframind/              # the Python package (installed via `pip install -e`)
 │   ├── __init__.py             # version, package docstring
@@ -53,11 +52,11 @@ inframind/
 │   └── helm/inframind/         # Helm chart for the InfraMind stack
 │
 ├── docs/                       # human-readable documentation
+│   ├── PROGRESS.md             # phase checklist + session log
 │   ├── ARCHITECTURE.md         # five-stage pipeline diagram
 │   ├── REPO_LAYOUT.md          # this file
 │   ├── CONTRIBUTING.md         # branch / commit / PR rules
-│   ├── DECISIONS.md            # decision log (ADR-lite, the deltas)
-│   ├── decision-tree.md        # locked decisions (WHAT and WHY) — the source of truth
+│   ├── decision-tree.md        # locked decisions + change log (WHAT, WHY, ADR-lite)
 │   ├── surface-map.md          # signals-in / incidents-out / env keys / upstream contract
 │   ├── standards/              # engineering conventions handbook (12 numbered files + README)
 │   │   ├── README.md           #   precedence, scope, glossary, every-rule-on-one-screen
@@ -80,8 +79,7 @@ inframind/
 └── .github/                    # GitHub-side config
     ├── workflows/ci.yml        # lint + test on every push and PR
     ├── CODEOWNERS              # auto-request review per directory
-    ├── PULL_REQUEST_TEMPLATE.md
-    └── dependabot.yml
+    └── PULL_REQUEST_TEMPLATE.md
 ```
 
 ## What each top-level directory is for

@@ -1,582 +1,538 @@
 # Architecture — InfraMind
 
-InfraMind is a **Kubernetes-native incident detection + root-cause analysis** system. When a
-fault hits a microservice application, InfraMind says **which service is the root cause, with
-evidence**, and sends one deduplicated alert. The ranking is **deterministic** — the LLM
-only summarises evidence; it never picks the root cause (D1). The pipeline runs as long-lived
-workers on a kind cluster, with Redis Streams as the conduit and PostgreSQL as the source
-of truth.
+| | |
+|---|---|
+| **System** | InfraMind — multi-signal incident detection and graph-guided RCA on Kubernetes |
+| **Status** | Target architecture (P0 scaffold; workers land P2–P8) |
+| **Cluster** | `kind` only · SUT: Online Boutique · faults: Chaos Mesh |
+| **Locked rules** | D1 deterministic RCA · D2 caller→callee · D9 LLM redaction |
 
-The *why* of every choice lives in [`docs/decision-tree.md`](decision-tree.md). The wire
-contracts (signal schemas, env keys, API surface) live in
-[`docs/surface-map.md`](surface-map.md). The conventions live in
-[`docs/standards/`](standards/README.md).
+InfraMind answers one question when a microservice fault occurs: **which service is the root
+cause, with evidence**, delivered as **one deduplicated alert**. Root-cause **ranking is
+deterministic**; the LLM **only summarises** the evidence bundle (D1). Long-lived workers
+run on the test cluster; **Redis Streams** is the inter-stage conduit; **PostgreSQL** is the
+source of truth.
 
-**Audience.** New contributors, the paper's §System Design, and the supervisor / external
-reader who lands on this file cold.
+| Document | Role |
+|---|---|
+| [`decision-tree.md`](decision-tree.md) | *Why* — locked decisions |
+| [`surface-map.md`](surface-map.md) | *Wire shapes* — schemas, streams, API |
+| [`standards/`](standards/README.md) | *How* — engineering conventions |
+
+**Audience:** contributors, thesis §System Design, external reviewers.
 
 ---
 
-## 1. The one-screen view
+## 1. System context (C4 — Level 1)
+
+```mermaid
+C4Context
+    title InfraMind — system context
+
+    Person(operator, "Operator", "Receives alerts, queries incidents")
+    Person(engineer, "SRE / Developer", "Runs eval, injects faults")
+
+    System(inframind, "InfraMind", "Ingests observability signals, detects incidents, ranks root causes, alerts once")
+
+    System_Ext(k8s, "Kubernetes (kind)", "Hosts SUT + observability + InfraMind")
+    System_Ext(obs, "Observability stack", "Prometheus, Loki, Jaeger/OTel, Alertmanager")
+    System_Ext(llm_api, "LLM provider", "OpenAI / Anthropic / Ollama (summary only)")
+    System_Ext(notify, "Notification sinks", "Slack, email, webhook")
+
+    Rel(engineer, k8s, "Deploys, Chaos Mesh faults")
+    Rel(k8s, obs, "Emits metrics, logs, traces, alerts")
+    Rel(obs, inframind, "Pull + Alertmanager webhook")
+    Rel(inframind, llm_api, "Evidence bundle in, summary out", "HTTPS")
+    Rel(inframind, notify, "Deduped alert")
+    Rel(inframind, operator, "Alert + GET /incidents")
+    Rel(operator, inframind, "Read incident JSON")
+```
+
+---
+
+## 2. Container view (C4 — Level 2)
+
+```mermaid
+C4Container
+    title InfraMind — containers inside the cluster
+
+    Person(operator, "Operator")
+
+    Container_Boundary(im, "Namespace: inframind") {
+        Container(ing, "Ingestion", "Python", "Collectors → Signal")
+        Container(det, "Detection", "Python", "Z-score, EWMA, spikes")
+        Container(cor, "Correlation", "Python", "Window, dedup, state machine")
+        Container(rca, "RCA", "Python", "NetworkX graph, rank, evidence")
+        Container(llm, "LLM explainer", "Python", "Prompt, validate, redact")
+        Container(alt, "Alerting", "Python", "Route, dedup, payload")
+        Container(api, "API", "FastAPI", "Webhooks, /incidents, health")
+    }
+
+    Container_Boundary(data, "Namespace: inframind-data") {
+        ContainerDb(redis, "Redis Streams", "Bus", "stream:signals, stream:incidents")
+        ContainerDb(pg, "PostgreSQL", "Store", "Incidents, audit log")
+    }
+
+    Container_Boundary(mon, "Namespace: monitoring") {
+        ContainerDb(prom, "Prometheus", "Metrics")
+        ContainerDb(loki, "Loki", "Logs")
+        ContainerDb(jaeger, "Jaeger", "Traces")
+        ContainerDb(am, "Alertmanager", "Alerts")
+    }
+
+    Rel(prom, ing, "PromQL pull")
+    Rel(loki, ing, "LogQL pull")
+    Rel(jaeger, ing, "Trace pull")
+    Rel(am, api, "Webhook POST")
+
+    Rel(ing, redis, "XADD signals")
+    Rel(det, redis, "XREAD / XADD")
+    Rel(cor, redis, "XREAD / XADD")
+    Rel(rca, redis, "XREAD incidents")
+
+    Rel(rca, llm, "Incident + candidates")
+    Rel(llm, alt, "Summary + claims")
+    Rel(rca, alt, "Ranked candidates")
+    Rel(alt, pg, "INSERT")
+    Rel(api, pg, "SELECT")
+    Rel(alt, operator, "Notify")
+    Rel(operator, api, "GET /incidents/{id}")
+```
+
+---
+
+## 3. End-to-end data flow (one screen)
+
+Solid lines: data path. Dashed: control or external push.
 
 ```mermaid
 flowchart TB
-    classDef obs fill:#dbeafe,stroke:#1e40af,color:#1e3a8a
-    classDef pipe fill:#fed7aa,stroke:#9a3412,color:#7c2d12
-    classDef alert fill:#e9d5ff,stroke:#6b21a8,color:#581c87
-    classDef store fill:#bbf7d0,stroke:#166534,color:#14532d
-    classDef api fill:#fef9c3,stroke:#854d0e,color:#713f12
-    classDef user fill:#f3f4f6,stroke:#374151,color:#111827
-
-    subgraph OBS["Observability backends"]
+    subgraph SOURCES["External observability"]
         direction LR
-        PR["Prometheus"]:::obs
-        LK["Loki"]:::obs
-        JG["Jaeger / OTel"]:::obs
+        PR(("Prometheus")):::source
+        LO(("Loki")):::source
+        JA(("Jaeger / OTel")):::source
+        AM(("Alertmanager")):::source
     end
-    AM["Alertmanager\n(push webhook)"]:::obs
 
-    subgraph PIPE["Pipeline (workers)"]
+    subgraph BUS["Redis Streams — conduit only (D20)"]
+        RS[("stream:signals")]:::bus
+        RI[("stream:incidents")]:::bus
+    end
+
+    subgraph WORKERS["Pipeline workers"]
         direction TB
-        ING["Ingestion\n(collectors)"]:::pipe
-        DC["Detection +\nCorrelation"]:::pipe
-        RCA["RCA\n(graph + rank)"]:::pipe
-        LLM["LLM\nexplainer"]:::pipe
+        ING["① Ingestion"]:::worker
+        DC["② Detection + Correlation"]:::worker
+        RCA["③ RCA<br/>graph + rank"]:::worker
+        subgraph EXPLAIN["④ Explanation & delivery"]
+            direction LR
+            LLM["④a LLM<br/>summary only"]:::worker
+            ALT["④b Alerting<br/>dedup + route"]:::worker
+        end
     end
 
-    subgraph BOTTOM["Alerts + persistence"]
-        direction TB
-        ALT["Alerting\n(dedup + route)"]:::alert
-        ST["Storage\n(Postgres)"]:::store
-        API["API\n(read + webhook)"]:::api
+    subgraph PERSIST["Persistence & surface"]
+        PG[("⑤ PostgreSQL<br/>source of truth")]:::store
+        API["API · FastAPI"]:::api
     end
 
-    USER(["Operator"]):::user
+    OP(["Operator"]):::human
 
-    PR --> ING
-    LK --> ING
-    JG --> ING
-    ING -- "Signal" --> DC
-    DC -- "Anomaly group" --> RCA
-    RCA -- "Incident + candidates" --> LLM
-    LLM -- "summary" --> ALT
-    RCA -- "ranked candidates" --> ALT
-    ALT -- "alert" --> USER
-    ALT --> ST
-    ST --> API
-    API --> USER
-    AM -. webhook .-> API
+    PR -->|pull| ING
+    LO -->|pull| ING
+    JA -->|pull| ING
+    AM -.->|webhook| API
+
+    ING -->|Signal| RS
+    RS --> DC
+    DC -->|Anomaly groups| RI
+    RI --> RCA
+    RCA --> LLM
+    RCA --> ALT
+    LLM -->|validated summary| ALT
+    ALT -->|INSERT| PG
+    PG --> API
+    ALT -->|one alert| OP
+    API -->|read| OP
+
+    classDef source fill:#dbeafe,stroke:#1d4ed8,color:#1e3a8a,stroke-width:2px
+    classDef worker fill:#ffedd5,stroke:#c2410c,color:#7c2d12,stroke-width:2px
+    classDef bus fill:#fef3c7,stroke:#b45309,color:#78350f,stroke-width:2px
+    classDef store fill:#dcfce7,stroke:#15803d,color:#14532d,stroke-width:2px
+    classDef api fill:#fef9c3,stroke:#a16207,color:#713f12,stroke-width:2px
+    classDef human fill:#f3f4f6,stroke:#4b5563,color:#111827,stroke-width:2px
 ```
 
-*Observability backends feed ingestion. Ingestion publishes `Signal` objects onto the bus.
-Detection + correlation produces anomaly groups. RCA ranks candidates with the dependency
-graph. The LLM summarises the evidence bundle; alerting dedupes and routes; storage
-persists. The API serves the webhooks and the read endpoints.*
-
-ASCII fallback (terminal / `cat` readers):
-
-```
-  +----------------------------------------------------------+
-  | Observability backends                                    |
-  |   Prometheus   Loki   Jaeger / OTel   Alertmanager        |
-  +--------+-----------------+------------------+-------------+
-           |                 |                  |
-           | pull            | pull             |  webhook (push)
-           v                 v                  +--------+
-  +--------+-------+   +-----+----+   +---------+        |
-  |  Ingestion    |-->| Detection |-->|   R C A |        |
-  |  (collectors) |   | + Correl. |   | (graph) |        |
-  +---------------+   +-----------+   +----+----+        |
-                                          |              v
-                                   +------v-----+   +----+----+
-                                   |    L L M   |   |  API   |
-                                   |  explainer |   | (read) |
-                                   +------+-----+   +-----+--+
-                                          | summary      ^
-                                          v              |
-  +----+----------------------------+    |        +------+------+
-  |  Storage (Postgres) |<----------+----+        | Alerting   |
-  |  (incidents, evidence) |                      | (dedup +   |
-  +-----------------------+                       |  route)    |
-                                                  +-----+------+
-                                                        |
-                                                        | alert
-                                                        v
-                                                   +---------+
-                                                   | Operator|
-                                                   +---------+
-```
+**Reading the diagram.** Collectors normalise backend payloads to `Signal`. Two stream
+boundaries decouple workers: `stream:signals` after ingestion, `stream:incidents` after
+correlation. RCA and downstream stages consume the incident stream; LLM and alerting share
+the ranked result in-process before persistence.
 
 ---
 
-## 2. The five-stage pipeline
+## 4. Five-stage pipeline (proposal §3.2)
+
+Aligned with the BSc proposal’s five layers; stage 4 splits into explainer + alerting.
 
 ```mermaid
-flowchart TB
-    classDef stage fill:#fef3c7,stroke:#92400e,color:#451a03
-    classDef api fill:#bbf7d0,stroke:#166534,color:#14532d
+flowchart LR
+    subgraph S1["Stage 1"]
+        A["Ingestion"]
+    end
+    subgraph S2["Stage 2"]
+        B["Detection +<br/>Correlation"]
+    end
+    subgraph S3["Stage 3"]
+        C["RCA"]
+    end
+    subgraph S4["Stage 4"]
+        D["LLM explainer"]
+        E["Alerting"]
+    end
+    subgraph S5["Stage 5"]
+        F["Storage"]
+    end
+    G["API"]
 
-    S1["1. Ingestion"]:::stage
-    S2["2. Detection + Correlation"]:::stage
-    S3["3. RCA (graph + rank + evidence)"]:::stage
-    S4A["4a. LLM explainer"]:::stage
-    S4B["4b. Alerting"]:::stage
-    S5["5. Storage (Postgres)"]:::stage
-    S6["Public API (FastAPI)"]:::api
+    A -->|"Signal"| B
+    B -->|"Incident<br/>(anomaly group)"| C
+    C --> D
+    C --> E
+    D -->|"summary + claims"| E
+    E -->|"INSERT"| F
+    F --> G
 
-    S1 -- "Signal\n(stream:signals)" --> S2
-    S2 -- "Anomaly group\n(stream:incidents)" --> S3
-    S3 -- "Incident + candidates" --> S4A
-    S3 -- "Incident + candidates" --> S4B
-    S4A -- "summary + claims" --> S4B
-    S4B -- "INSERT" --> S5
-    S5 -- "rows" --> S6
+    style S1 fill:#eff6ff,stroke:#3b82f6
+    style S2 fill:#fff7ed,stroke:#f97316
+    style S3 fill:#fdf4ff,stroke:#a855f7
+    style S4 fill:#fefce8,stroke:#eab308
+    style S5 fill:#ecfdf5,stroke:#10b981
 ```
 
-ASCII fallback (terminal / `cat` readers):
+| # | Stage | Package | Owner | Input | Output |
+|---:|---|---|---|---|---|
+| 1 | Ingestion | `ingestion/` | Moneem | PromQL, LogQL, traces, AM webhook | `Signal` → `stream:signals` |
+| 2 | Detection + correlation | `detection/`, `correlation/` | Moneem | `Signal` | `Incident` / groups → `stream:incidents` |
+| 3 | RCA | `rca/` **(core)** | Prome | Incidents + call graph | Ranked `Candidate[]` + `Evidence` |
+| 4a | LLM explainer | `llm/` | Prome | Incident + candidates | `summary`, validated `claims[]` |
+| 4b | Alerting | `alerting/` | Prome | Rank + summary | One deduped, routed alert |
+| 5 | Storage | `storage/` | Prome | Rows | Postgres + audit log |
+| — | API | `api/` | Prome | HTTP | Webhook ingress, `GET /incidents` |
 
-```
-  +---------------------------+
-  |  1. Ingestion             |   <-- collectors pull
-  +-------------+-------------+
-                |
-                | Signal (stream:signals)
-                v
-  +---------------------------+
-  |  2. Detection + Correlation|
-  +-------------+-------------+
-                |
-                | Anomaly group (stream:incidents)
-                v
-  +---------------------------+
-  |  3. RCA                   |   <-- graph decides (D1)
-  +-------------+-------------+
-                |
-       +--------+--------+
-       |                 |
-       v                 v
-  +-----------+   +-----------+
-  | 4a. LLM   |   | 4b. Alert |
-  | explainer |---| (dedup +  |
-  +-----------+   |  route)   |
-        |        +-----+------+
-        | summary      |
-        +----->--------+
-                       |
-                       | INSERT
-                       v
-  +---------------------------+
-  |  5. Storage (Postgres)    |   <-- incidents, evidence, audit
-  +-------------+-------------+
-                |
-                | rows
-                v
-  +---------------------------+
-  |  Public API (FastAPI)     |
-  +---------------------------+
-```
+**Pinned shapes:** [`surface-map.md`](surface-map.md) — `Signal`, `Anomaly`, `Incident`,
+`Candidate`, `Evidence`, `Alert`.
 
-| # | Stage | Subpackage | Owner | Inputs | Outputs |
-|---|---|---|---|---|---|
-| 1 | **Ingestion** | `src/inframind/ingestion/` | Moneem | PromQL, LogQL, OTLP, Alertmanager webhook | `Signal` on `stream:signals` |
-| 2 | **Detection + Correlation** | `src/inframind/detection/`, `src/inframind/correlation/` | Moneem | `Signal` from bus | `Anomaly` groups on `stream:incidents` |
-| 3 | **RCA** | `src/inframind/rca/` (CORE) | Prome | `Anomaly` groups + service-call graph | ranked `Candidate[]` with `Evidence` |
-| 4a | **LLM explainer** | `src/inframind/llm/` | Prome | `Incident` + `Candidate[]` | `summary` + `claims[]` (validated) |
-| 4b | **Alerting** | `src/inframind/alerting/` | Prome | ranked candidates + LLM summary | deduplicated, severity-routed alert |
-| 5 | **Storage** | `src/inframind/storage/` | Prome | incident / candidate / evidence / alert | Postgres rows |
-| – | **API** | `src/inframind/api/` | Prome | webhook POST, `GET /incidents` | JSON responses |
+**Adjacent (not runtime pipeline):**
 
-The owner column mirrors the Team table in `CLAUDE.md`. The pipeline's two bus crossings
-are the only shared state between workers — every other handoff is a function call inside
-a process or an HTTP request from an external client.
-
-**Contract pinned shapes** (`docs/surface-map.md`):
-
-- `Signal` — the canonical observation. `ts` is observation time; `service` is
-  lower-kebab-case; `attrs` is JSON-serialisable, no secrets (D9).
-- `Anomaly` — a single detector firing on one signal.
-- `Incident` — a grouped set of `Anomaly` objects with metadata (id, opened_at,
-  closed_at, state, services, signals, candidates, primary, summary, alerts).
-- `Candidate` — one possible root cause service and its evidence bundle.
-- `Evidence` — one item in the bundle (metric snapshot, log line, trace span, change
-  event).
-- `Alert` — the rendered, redacted, deduplicated payload that goes out.
-
-**Adjacent work, not in the runtime flow** (still owned, still pinned — see
-[`CLAUDE.md`](../CLAUDE.md) Team table):
-
-| Area | Owner | Subpackage / path |
+| Area | Owner | Path |
 |---|---|---|
-| Testbed (kind cluster, observability stack, Chaos Mesh, Online Boutique) | Rifat | `testbed/` |
-| Helm packaging for InfraMind itself (`make up` for the full stack) | Rifat | `deploy/helm/inframind/` |
-| Evaluation harness (≥12 scenarios × 5 reps + 6 baselines + ablations) | Rifat | `evaluation/` |
-| Agentic workflow (19 agents + 15 skills that ship the project) | team | `.claude/` |
+| Testbed | Rifat | `testbed/` |
+| Helm / `make up` | Rifat | `deploy/helm/inframind/` |
+| Evaluation | Rifat | `evaluation/` |
+| Agent workflow | team | `.claude/`, `docs/AGENT_WORKFLOW.md` |
 
 ---
 
-## 3. Sequence: one fault, end to end
+## 5. Sequence — one fault, end to end
+
+Typical path: redis unavailable; symptom at `frontend`; ~5 s to readable incident JSON.
 
 ```mermaid
 sequenceDiagram
     autonumber
-    actor Op as Operator
-    participant CM as ChaosMesh
-    participant Pod as K8sPod
-    participant Det as Detector
-    participant Cor as Correlator
-    participant RCA as RCA
-    participant LLM as LLM
-    participant Alt as Alerter
-    participant PG as Postgres
-    participant API as API
+    box rgba(254,243,199,0.3) Evaluation
+        actor Op as Operator
+        participant CM as Chaos Mesh
+    end
+    box rgba(254,202,202,0.3) System under test
+        participant SUT as Online Boutique
+    end
+    box rgba(219,234,254,0.3) Observability
+        participant OBS as Prometheus / Loki / Jaeger
+    end
+    box rgba(255,237,213,0.3) InfraMind pipeline
+        participant ING as Ingestion
+        participant RS as Redis Streams
+        participant DET as Detection
+        participant COR as Correlation
+        participant RCA as RCA engine
+        participant LLM as LLM explainer
+        participant ALT as Alerting
+    end
+    box rgba(220,252,231,0.3) Persistence
+        participant PG as PostgreSQL
+        participant API as API
+    end
 
-    Op->>CM: apply PodChaos (kill frontend)
-    CM-->>Pod: SIGKILL at t=0s
-    Pod-->>Det: metric + log + trace land
-    Note over Det: Z-score fires at t=1s
-    Det->>Cor: Anomaly(service=frontend, z=4.2)
-    Cor->>Cor: sliding-window group + dedup
-    Cor->>RCA: Incident opened at t=2s
-    RCA->>RCA: walk toward callees (D2)
-    RCA->>LLM: Incident + ranked candidates + evidence
-    Note over LLM: redact (D9); call OpenAI / Ollama
-    LLM-->>RCA: summary + claims[] (validated)
-    RCA->>Alt: ranked candidates + summary
-    Alt->>Alt: dedup, route by severity
-    Alt-->>Op: alert (Slack / email / webhook)
-    Alt->>PG: INSERT incident, candidate, evidence, alert
-    PG-->>API: row visible at t=5s
+    Op->>CM: Apply PodChaos / network fault
+    CM-->>SUT: Fault at t₀
+    SUT-->>OBS: Metrics, logs, traces
+    OBS-->>ING: Pull cycle
+    ING->>RS: XADD stream:signals (Signal)
+    RS-->>DET: XREAD
+    Note over DET: Z-score fires (~t₀+1s)
+    DET->>COR: Anomaly
+    COR->>COR: Window + dedup
+    COR->>RS: XADD stream:incidents
+    RS-->>RCA: XREAD (~t₀+2s)
+    RCA->>RCA: Walk toward callees (D2)
+    RCA->>LLM: Incident + evidence bundle
+    Note over LLM: Redact (D9); temperature=0
+    LLM-->>RCA: Summary + claims (validated)
+    RCA->>ALT: Rank + summary
+    ALT->>ALT: Dedup, severity route
+    ALT-->>Op: Single alert
+    ALT->>PG: INSERT incident, evidence, audit
     Op->>API: GET /incidents/{id}
-    API-->>Op: 200 Incident JSON
+    API->>PG: SELECT
+    PG-->>API: Row
+    API-->>Op: 200 Incident JSON (~t₀+5s)
 ```
 
-ASCII fallback (terminal readers):
-
-```
-Op  CM    Pod   Det   Cor   RCA   LLM   Alt   PG   API
- |   |     |     |     |     |     |     |    |    |
- |---apply PodChaos (kill frontend)---------------------|
- |    |--SIGKILL-->|
- |    |    |--metric + log + trace land-->|
- |    |    |        Z-score fires (t=1s)|
- |    |    |          Anomaly(frontend, z=4.2)-->|
- |    |    |          group + dedup-->|
- |    |    |            Incident opened (t=2s)-->|
- |    |    |              walk toward callees (D2)|
- |    |    |                ranked candidates + evidence-->|
- |    |    |                  redact (D9) + LLM call|
- |    |    |                    summary + claims (validated)<-|
- |    |    |                      ranked candidates + summary-->|
- |    |    |                        dedup + route by severity|
- |    |    |<-----alert (Slack / email / webhook)|
- |    |    |                        INSERT incident + candidate + evidence + alert-->|
- |    |    |                          row visible (t=5s)------>|
- |<---GET /incidents/{id}------------------------------------|
- |    |    |                                              200 Incident JSON
-```
-
-*A fault is injected, three observability backends see it, the detector fires in ~1
-second, correlation groups it into an incident in another second, the RCA walks the call
-graph and bundles evidence, the LLM summarises with citation checking, the alerter sends
-one deduplicated alert, and the storage layer persists the full audit row. End-to-end:
-~5 seconds from fault to readable `Incident` JSON.*
-
-The shape is the *typical* path. A detection may take longer if the rolling window is
-warming up; the LLM call may retry on a validator failure; an alert may be suppressed by
-dedup. None of these change the data flow — only the timing.
+Timing varies with baseline warm-up, LLM retries, or dedup suppression; the **data flow**
+does not change.
 
 ---
 
-## 4. Layer view
-
-Three layers: workers produce and consume; bus + store is shared state; HTTP is the only
-ingress and egress.
+## 6. Logical layers
 
 ```mermaid
 flowchart TB
-    subgraph L3["Layer 3 — Public surface (api/)"]
-        EXT(["External reader<br/>Operator alarm at paged Slack"])
-        HTTP["webhooks/alertmanager<br/>/incidents<br/>/healthz<br/>/metrics<br/>/readyz"]
-    end
-    subgraph L2["Layer 2 — Bus + Store"]
-        REDIS["Redis Streams<br/>stream:signals<br/>stream:incidents<br/>(conduit, never truth)"]
-        PG["Postgres<br/>incidents, candidates,<br/>evidence, alerts, audit_log<br/>(source of truth)"]
-    end
-    subgraph L1["Layer 1 — Workers"]
-        ING["ingestion"]
-        DC["detection + correlation"]
-        RCA["rca"]
-        LLM["llm"]
-        ALT["alerting"]
-    end
-
-    EXT --> HTTP
-    HTTP --> PG
-    L1 --> REDIS
-    L1 --> PG
-    HTTP --> L1
-```
-
-ASCII fallback:
-
-```
-  Layer 3 (HTTP, api/)  :  webhooks/alertmanager, /incidents, /healthz, /metrics
-       ^                       |
-       |  read / write         v
-  Layer 2 (bus + store) :  Redis Streams (conduit)  +  Postgres (truth)
-       ^                       ^
-       |  publish / INSERT     |  INSERT / SELECT
-  Layer 1 (workers)    :  ingestion, detection+correlation, rca, llm, alerting
-```
-
-Three rules:
-
-1. **Workers never call each other across layer 1.** A stage that needs the previous
-   stage's output reads the bus. A stage that needs its own output reads the store.
-3. **The bus is a conduit, never the truth.** Redis Streams entries can be trimmed; that
-   does not lose data, because Postgres holds the same data durably. D20.
-4. **HTTP is the only ingress.** The only POST the API accepts is the Alertmanager
-   webhook; every other ingress is a pull by an external collector, and the only egress is
-   the alerting payload + the read API.
-
----
-
-## 5. Deployment view
-
-```mermaid
-flowchart TB
-    classDef ns_cm fill:#fef9c3,stroke:#854d0e,color:#713f12
-    classDef ns_sut fill:#fecaca,stroke:#991b1b,color:#7f1d1d
-    classDef ns_obs fill:#dbeafe,stroke:#1e40af,color:#1e3a8a
-    classDef ns_im fill:#fed7aa,stroke:#9a3412,color:#7c2d12
-    classDef ns_api fill:#fef3c7,stroke:#92400e,color:#451a03
-    classDef ns_data fill:#bbf7d0,stroke:#166534,color:#14532d
-
-    subgraph CM_NS["chaos-mesh"]
-        CH["Chaos Mesh\n(controller + daemons)"]:::ns_cm
-    end
-
-    subgraph SUT_NS["default (system under test)"]
-        OB["Online Boutique\n+ load generator"]:::ns_sut
-    end
-
-    subgraph OBS_NS["monitoring"]
+    subgraph L3["Layer 3 — Public surface · api/"]
         direction LR
-        PR3["Prometheus"]:::ns_obs
-        LK3["Loki"]:::ns_obs
-        JG3["Jaeger"]:::ns_obs
-        AM3["Alertmanager"]:::ns_obs
+        EP1["POST webhooks/alertmanager"]
+        EP2["GET /incidents · /healthz · /metrics"]
+        EP3["Operators & integrations"]
     end
 
-    subgraph IM_NS["inframind (pipeline)"]
+    subgraph L2["Layer 2 — Shared state"]
+        direction LR
+        REDIS["Redis Streams · conduit (D20)"]
+        PG2["PostgreSQL · source of truth"]
+    end
+
+    subgraph L1["Layer 1 — Workers"]
+        direction LR
+        W_ING["ingestion"]
+        W_DET["detection"]
+        W_COR["correlation"]
+        W_RCA["rca · llm · alerting"]
+    end
+
+    L1 -->|"XADD / XREAD / INSERT"| L2
+    L2 -->|"SELECT / webhook"| L3
+
+    style L1 fill:#ffedd5,stroke:#ea580c,color:#7c2d12
+    style L2 fill:#fef3c7,stroke:#d97706,color:#78350f
+    style L3 fill:#fef9c3,stroke:#ca8a04,color:#713f12
+```
+
+**Layer rules**
+
+1. **No direct worker-to-worker calls across stage boundaries.** Consume the previous
+   stage from Redis (or in-process only *after* the incident stream consumer, e.g. RCA → LLM).
+2. **Publish at boundaries.** `stream:signals` after ingestion; `stream:incidents` after
+   correlation.
+3. **Bus ≠ truth (D20).** Postgres holds durable incidents; Redis may trim without losing
+   audit data already inserted.
+4. **HTTP ingress.** Alertmanager webhook → API; all other ingress is collector pull.
+
+---
+
+## 7. Kubernetes deployment (target — P8)
+
+```mermaid
+flowchart TB
+    subgraph NS_CM["namespace: chaos-mesh"]
+        CM["Chaos Mesh"]:::chaos
+    end
+
+    subgraph NS_DEF["namespace: default"]
+        OB["Online Boutique + load"]:::sut
+    end
+
+    subgraph NS_MON["namespace: monitoring"]
+        direction LR
+        PROM["Prometheus"]:::mon
+        LOKI["Loki"]:::mon
+        JAE["Jaeger"]:::mon
+        AM["Alertmanager"]:::mon
+    end
+
+    subgraph NS_PIPE["namespace: inframind — workers"]
         direction TB
-        IMG["ingestion\n(Deployment)"]:::ns_im
-        DMC["detection\n+ correlation"]:::ns_im
-        RM["rca\n(graph + rank)"]:::ns_im
-        LM["llm\n(explainer)"]:::ns_im
-        ALM["alerting\n(dedup + route)"]:::ns_im
+        W1["Deployment: ingestion"]:::im
+        W2["Deployment: detection + correlation"]:::im
+        W3["Deployment: rca → llm → alerting"]:::im
     end
 
-    subgraph API_NS["inframind (api)"]
-        APM["api\n(FastAPI)"]:::ns_api
+    subgraph NS_API["namespace: inframind — api"]
+        WAPI["Deployment: api"]:::api
     end
 
-    subgraph DATA_NS["inframind-data"]
-        RDS["Redis Streams\nstream:signals\nstream:incidents"]:::ns_data
-        PGG["Postgres\nincidents / candidates /\nevidence / alerts / audit"]:::ns_data
+    subgraph NS_DATA["namespace: inframind-data"]
+        REDIS["Redis"]:::data
+        POSTGRES["PostgreSQL"]:::data
     end
 
-    CH -.->|injects fault| OB
-    OB -- traces --> JG3
-    PR3 -- pull --> IMG
-    LK3 -- pull --> IMG
-    JG3 -- pull --> IMG
-    AM3 -. webhook .-> APM
-    IMG -- writes --> RDS
-    IMG --> DMC
-    DMC -- writes --> RDS
-    DMC --> RM
-    RM -- reads --> RDS
-    RM --> LM
-    LM --> ALM
-    ALM --> PGG
-    APM -- reads --> PGG
-    APM -- webhook push --> ALM
+    CM -.->|fault injection| OB
+    OB --> JAE
+    PROM & LOKI & JAE -->|pull| W1
+    AM -.->|webhook| WAPI
+
+    W1 -->|XADD| REDIS
+    W2 <-->|XREAD / XADD| REDIS
+    W3 -->|XREAD| REDIS
+    W3 -->|INSERT| POSTGRES
+    WAPI -->|SELECT| POSTGRES
+
+    classDef chaos fill:#fef9c3,stroke:#ca8a04,color:#713f12
+    classDef sut fill:#fee2e2,stroke:#dc2626,color:#7f1d1d
+    classDef mon fill:#dbeafe,stroke:#2563eb,color:#1e40af
+    classDef im fill:#ffedd5,stroke:#ea580c,color:#9a3412
+    classDef api fill:#fef3c7,stroke:#ca8a04,color:#854d0e
+    classDef data fill:#d1fae5,stroke:#059669,color:#065f46
 ```
 
-**Legend.** Each color is one namespace:
+| Edge style | Meaning |
+|---|---|
+| Solid | Data path (pull, stream, SQL) |
+| Dashed | Control (Chaos injection, Alertmanager push) |
 
-- **yellow** — `chaos-mesh` (the fault injector; arrows from it are dashed).
-- **red** — `default` (Online Boutique, the system under test; receives faults).
-- **blue** — `monitoring` (Prometheus, Loki, Jaeger, Alertmanager; pulled by InfraMind).
-- **orange** — `inframind/pipeline` (the 5 worker Deployments in call order).
-- **gold** — `inframind/api` (the FastAPI Deployment; webhook ingress + read API).
-- **green** — `inframind-data` (Redis as conduit, Postgres as source of truth).
+**RBAC:** InfraMind `ServiceAccount`s — read-only `get/list/watch` on pods, logs, events,
+configmaps; no `exec`, no writes. Details: [`standards/11-helm-packaging.md`](standards/11-helm-packaging.md).
 
-Three edge styles carry meaning:
-
-- **solid arrow** — direct pod-to-pod traffic (in-process call, push, or INSERT).
-- **dashed arrow** — control-plane or fault injection (Chaos Mesh injecting, Alertmanager
-  webhook push).
-- **labelled arrow** — bus cross: `writes` (publish) or `reads` (consume) on a named Redis
-  stream, or INSERT/SELECT on Postgres.
-
-ASCII fallback (the same picture, for terminal readers):
-
-```
-  namespace: chaos-mesh                              namespace: default (SUT)
-  +----------------------+   injects fault    +----------------------------+
-  |   Chaos Mesh         | ------------------> |    |  Online Boutique       |
-  | (controller+daemons) |                     |    |  + load generator       |
-  +----------------------+                     |    +------------+-----------+
-                                                |                 |
-                                                |  traces         |
-  namespace: monitoring                          |                 v
-  +--------------------------------------------+--+   namespace: monitoring
-  |  Prometheus   Loki   Jaeger   Alertmanager |       (Jaeger scrapes SUT)
-  +-----+--------+----+--------+---------------+
-        |        |    |         |
-        | pull   |    |         | push  (webhook)
-        |        |    |         v
-        |        |    |    namespace: inframind (api)
-        |        |    |    +-------------------+
-        |        |    |    |  api  (FastAPI)   | <--- webhooks + read API
-        |        |    |    +---------+---------+
-        |        |    |              ^
-        v        v    v              | reads
-  namespace: inframind (pipeline)    |
-  +-------------------+   +----------+----+   +-----+-----+   +--------+
-  |   ingestion       |-->| detection     |-->|   rca     |-->|  llm   |
-  | (collectors pull) |   | + correlation |   | (graph)  |   | (D1)   |
-  +---------+---------+   +--------+-----+   +-----+-----+   +----+---+
-            | writes              | writes           | reads         | summary
-            v                    v                  v               v
-  +---------------------+    +-----------------+   +-----------+   +-----+-----+
-  |  Redis Streams      |<---| stream:incidents|   |  Redis    |   | alert    |
-  |  stream:signals     |    +-----------------+   | (read)    |   | (dedup)  |
-  +---------------------+                           +-----------+   +-----+-----+
-                                                                     |
-                                                                     | INSERT
-                                                                     v
-  namespace: inframind-data              +----------------------------+
-  +--------------------------------+     |       Postgres             |
-  |  Postgres (truth)              | <---+  (incidents / candidates / |
-  |  incidents, evidence, audit    |     |   evidence / alerts)        |
-  +--------------------------------+     +----------------------------+
-```
-
-The deployment view is **aspirational at Step 0**. The `deploy/helm/inframind/`
-`deployment-<stage>.yaml` files are built in P8; the namespace names are owned by the
-testbed-engineer agent (`docs/standards/11-helm-packaging.md`). The diagram is the
-target. The unit tests for each stage run today (`make test`); the integration tests
-run against the kind cluster (`make e2e`).
-
-Read-only RBAC: every InfraMind stage that talks to the K8s API does so with a
-`ServiceAccount` that has only `get`, `list`, `watch` on `pods`, `pods/log`, `events`,
-`configmaps`. No `exec`. No write. See `docs/standards/11-helm-packaging.md` for the
-chart layout and the secret discipline.
+*Diagram is the P8 target; P0 runs unit tests locally and `docker compose` for Redis/Postgres only.*
 
 ---
 
-## 6. RCA in detail
+## 8. RCA — graph walk and scoring
 
-This section is the heart of the paper. The graph stage is **deterministic**; the LLM
-only writes the natural-language summary.
+Deterministic rank (D1); edges **caller → callee**; walk from **symptom toward callees** (D2).
 
-**D1.** *The LLM summarises evidence; the graph decides.* The ranked list comes from the
-graph algorithm. The LLM receives the ranked list + the evidence bundle and writes a
-summary. Every claim it makes cites an evidence id from the bundle; the validator in
-`docs/standards/07-llm-explainer.md` rejects claims citing fabricated ids. The LLM never
-picks the root cause. Adding an LLM-as-judge baseline is reported as a separate ablation
-(D7, baseline 6), not as a change to the system's output.
+### 8.1 Example topology (Online Boutique)
 
-**D2.** *Edges are `caller -> callee`. Failures propagate `callee -> caller`. We walk
-from the symptom service toward its callees.* Anyone writing "upstream" without
-defining which way they mean is wrong. The walk is bounded by `max_depth=4` by default;
-tune on the dev split.
+```mermaid
+flowchart LR
+    FE["frontend<br/>(symptom)"]:::symptom
+    CA["cart"]:::mid
+    RE["redis<br/>(injected fault)"]:::root
+    PC["productcatalogservice"]:::mid
+    PA["payment"]:::mid
+    PP["paymentprovider"]:::leaf
+    SH["shipping"]:::mid
+    SS["shippingservice"]:::leaf
 
-**D15.** *Evidence is bundled before ranking, not after.* The walker collects per-candidate
-evidence as it goes. The ranking is computed on the bundle, never on a score computed
-before the evidence is known. This keeps the score explainable and the LLM prompt stable.
+    FE --> CA --> RE
+    FE --> PA --> PP
+    FE --> SH --> SS
+    CA --> PC
 
-**The default scoring formula** (lock-down weights; see `docs/standards/06-rca-scoring.md`):
-
-```
-score(s) = w1 * anomaly_severity
-        + w2 * earliest_onset
-        + w3 * downstream_depth
-        + w4 * change_correlation
+    classDef symptom fill:#fecaca,stroke:#b91c1c,color:#7f1d1d,stroke-width:2px
+    classDef root fill:#bbf7d0,stroke:#15803d,color:#14532d,stroke-width:3px
+    classDef mid fill:#e0e7ff,stroke:#4338ca,color:#312e81
+    classDef leaf fill:#f3f4f6,stroke:#9ca3af,color:#374151
 ```
 
-**The PageRank variant.** Personalised PageRank over the call graph, seeded by per-service
-anomaly score (`alpha = 0.85`). Reported as a sensitivity analysis next to the default.
+```mermaid
+flowchart TB
+    START(["Incident opened<br/>symptom = frontend"]):::start
+    W1["Traverse to callee: cart"]:::step
+    W2["Traverse to callee: redis"]:::step
+    BUNDLE["Bundle evidence<br/>(anomalies + snapshots + changes)"]:::step
+    RANK["Score candidates<br/>(D15: evidence before rank)"]:::step
+    OUT(["Top-1: redis"]):::out
 
-**Reproducibility.** Same `(graph, anomaly_set, seed)` produces the same ranking,
-regardless of LLM version. The LLM's `temperature=0` and the cache key
-`(scenario_id, prompt_version, evidence_bundle_hash, model)` together make the summary
-reproducible too.
+    START --> W1 --> W2 --> BUNDLE --> RANK --> OUT
 
-A worked walk on a synthetic Online Boutique topology (caller -> callee), with the
-symptom at `frontend`:
-
-```
-   frontend ----> cart ----> redis
-       \             \----> productcatalogservice
-        \---> payment ----> paymentprovider
-        \---> shipping ----> shippingservice
+    classDef start fill:#dbeafe,stroke:#1d4ed8
+    classDef step fill:#fff7ed,stroke:#ea580c
+    classDef out fill:#dcfce7,stroke:#16a34a,stroke-width:2px
 ```
 
-Fault: `redis` is dead. The symptom is `frontend` (5xx + p95 spike). The walker moves
-*into* the graph along the arrows, finds `cart`, then `redis`. `redis` is ranked top-1.
-The evidence bundle is the set of `Anomaly` ids the walker collected, plus the metric
-snapshots at the fault's start, plus the rollout history. The LLM summarises: *"The
-`redis` cache is unreachable; `cart` times out and `frontend` returns 5xx."*
+### 8.2 Scoring (default ranker)
+
+```text
+score(s) = w1 · anomaly_severity
+         + w2 · earliest_onset
+         + w3 · downstream_depth
+         + w4 · change_correlation
+```
+
+**PageRank variant:** personalised PageRank on the call graph (α = 0.85), reported as
+sensitivity analysis — not the production ranker (D7 baselines).
+
+**Reproducibility:** `(graph, anomaly_set, seed)` fixes the rank; LLM uses `temperature=0`
+and cache key `(scenario_id, prompt_version, evidence_bundle_hash, model)`.
+
+Deep dive: [`standards/06-rca-scoring.md`](standards/06-rca-scoring.md),
+[`standards/07-llm-explainer.md`](standards/07-llm-explainer.md).
 
 ---
 
-## 7. Why this shape
+## 9. Domain model (conceptual)
 
-**Why five stages and not one big module.** Each stage has one owner (per the Team
-table in `CLAUDE.md`) and a clean contract. That makes it possible to swap a detector
-without touching RCA, replay synthetic signals through stages 3–5 without standing up
-the K8s testbed, and A/B-score RCA variants using the same incident fixture.
+```mermaid
+erDiagram
+    SIGNAL ||--o{ ANOMALY : "triggers"
+    ANOMALY }o--|| INCIDENT : "groups into"
+    INCIDENT ||--|{ CANDIDATE : "ranks"
+    CANDIDATE ||--|{ EVIDENCE : "bundles"
+    INCIDENT ||--o{ ALERT : "emits"
+    INCIDENT ||--|| INCIDENT_ROW : "persists as"
 
-**Why deterministic RCA and not LLM-as-judge.** D1 in `CLAUDE.md` is locked. The LLM
-writes only the natural-language summary; the ranked list comes from the deterministic
-graph stage. The same evidence bundle produces the same ranking, regardless of LLM
-version. The LLM-as-judge ablation (D7, baseline 6) is reported separately and is the
-baseline that justifies the choice.
-
-**Why the bus is the conduit, the store is the truth.** D20. If Postgres is
-unavailable, the system refuses to acknowledge an incident rather than silently
-dropping it. Redis Streams entries are ephemeral; their loss does not lose data,
-because the same data is durably in Postgres. The audit log table is append-only; the
-only API on it is `INSERT` and `SELECT`.
+    SIGNAL {
+        string id
+        datetime ts
+        string service
+        string source
+        string kind
+    }
+    INCIDENT {
+        string id
+        string state
+        datetime opened_at
+    }
+    CANDIDATE {
+        string service
+        float score
+    }
+    EVIDENCE {
+        string id
+        string kind
+    }
+    ALERT {
+        string fingerprint
+        string severity
+    }
+```
 
 ---
 
-## 8. Cross-reference
+## 10. Design rationale (summary)
 
-- **The why:** [`docs/decision-tree.md`](decision-tree.md) — D1 (LLM summarises), D2
-  (graph orientation), D4 (baseline freeze), D6 (evaluation matrix), D7 (baselines), D9
-  (redaction + Ollama), D15 (evidence first), D-Setup.
-- **The wire shapes:** [`docs/surface-map.md`](surface-map.md) — `Signal` / `Incident`
-  / `Candidate` / `Evidence` / `Alert` schemas, env keys, upstream contract, Postgres
-  schema, FastAPI routes.
-- **The hard rules:** [`CLAUDE.md`](../CLAUDE.md) — D1–D9, team ownership, agent + skill
-  index.
-- **The conventions:** [`docs/standards/`](standards/README.md) — every convention this
-  diagram implies, with rationale:
-  - pipeline stages, dependency DAG, module ownership: `01-project-structure`
-  - python standards, docstrings, logging, errors: `02-python-standards`
-  - the `Signal` schema: `03-signal-schema`
-  - adding a collector (Prometheus / Loki / Jaeger / Alertmanager): `04-add-collector`
-  - adding a detector (Z-score / EWMA / error-rate): `05-add-detector`
-  - the RCA scoring formula, PageRank variant, evidence bundle: `06-rca-scoring`
-  - the LLM explainer, validator, redaction, Ollama fallback: `07-llm-explainer`
-  - commit protocol, branch prefixes, what never goes in a commit: `08-commit-protocol`
-  - bringing up the testbed, smoke checks, common issues: `09-testbed-ops`
-  - single scenario, full matrix, soak, 6 baselines (D7), ablations: `10-evaluation`
-  - the Helm chart for InfraMind itself: `11-helm-packaging`
-  - IEEE paper structure, D1/D2/D7 wording, submission: `12-paper-writing`
-- **The paper:** `paper/` — LaTeX source + bibliography.
+| Choice | Rationale |
+|---|---|
+| Five stages, one owner each | Swap detectors or RCA rankers without cross-team rewrites; replay fixtures from stream 3 onward |
+| Deterministic RCA (D1) | Same evidence → same rank; LLM version cannot change the primary |
+| Redis + Postgres (D20) | Decouple workers; refuse silent loss if Postgres is down |
+| Statistical detection (D3) | BSc scope: Z-score, EWMA, spikes — no DL training |
+| LLM summariser only | Matches proposal §3.2.4 and literature on hallucination risk |
+
+---
+
+## 11. Cross-reference index
+
+| Topic | Location |
+|---|---|
+| Why (D1, D2, D4, D6, D7, D9, D15, D20) | [`decision-tree.md`](decision-tree.md) |
+| Schemas, env, API routes | [`surface-map.md`](surface-map.md) |
+| Team, hard rules, agents | [`CLAUDE.md`](../CLAUDE.md) |
+| Conventions 01–12 | [`standards/README.md`](standards/README.md) |
+| Paper | `paper/` |
+
+---
+
+*Plain-text fallback:* if Mermaid does not render in your viewer, open this file on GitHub or
+in VS Code / Cursor with Mermaid preview; the tables above remain the canonical stage contract.

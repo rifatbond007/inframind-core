@@ -27,7 +27,7 @@ You build the harness that turns InfraMind's outputs into numbers. The numbers g
 - Ablation: with each component disabled (no correlation, no RCA, no LLM) → measures each contribution.
 - Every scenario YAML includes: `scenario_id`, `seed`, `fault_type`, `target_service`, `duration_s`, `ground_truth_root_cause`, `expected_affected_services`.
 
-## Scenario coverage (locked in DECISIONS / proposal §4.3.2)
+## Scenario coverage (locked in decision-tree D6 / proposal §4.3.2)
 
 1. Service crash (pod-kill)
 2. Pod restart loop (CrashLoopBackOff)

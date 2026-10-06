@@ -4,13 +4,13 @@
 > (the diagram) and [`REPO_LAYOUT.md`](REPO_LAYOUT.md) (where the code lives). This file decides
 > things; the others describe the consequences.
 >
-> Every decision below is **locked** — to change one, append a new entry to
-> [`DECISIONS.md`](DECISIONS.md) with the date, the change, the trigger, and the supervisor's
-> sign-off (if required). The hard rules in `CLAUDE.md` (no DL training, no scope creep, no
+> Every decision below is **locked** — to change one, append a row to
+> [Change log](#change-log-adr-lite) (date, change, trigger, supervisor sign-off when required).
+> The hard rules in `CLAUDE.md` (no DL training, no scope creep, no
 > invented numbers) are not repeated here; they cannot be overridden by any decision below.
 >
-> Decisions are numbered `D-NN`. Older IDs come first. Anything newer than the last entry here
-> is provisional until it lands in `DECISIONS.md`.
+> Decisions are numbered `D-NN` or `D-<name>`. Older IDs come first. Proposal deltas stay in the
+> change log until supervisor approval, then move into a numbered section here.
 
 ---
 
@@ -23,6 +23,15 @@ evidence bundle the ranking produced.
 **Trigger to revisit:** supervisor requests an LLM-as-judge ablation for the paper. Revisit, do
 not reverse: any ablation that lets the LLM *pick* must be reported as a separate baseline, not as
 a change to the system's output.
+
+## D2. Dependency graph orientation and RCA walk direction
+
+The service dependency graph is a NetworkX `DiGraph` with edges **caller → callee**. Failures
+propagate **callee → caller**. RCA starts at the symptom service and walks **toward its callees**
+(deeper into the graph). Do not use “upstream” without stating which direction you mean.
+
+**Trigger to revisit:** if trace topology cannot be inferred reliably, document the fallback in
+the change log and get supervisor sign-off.
 
 ## D3. No deep-learning training
 
@@ -88,7 +97,7 @@ Where the system-under-test needs instrumentation the upstream doesn't ship, Inf
 `testbed/sidecars/` and are version-pinned.
 
 **Trigger to revisit:** if the upstream image ships an OpenTelemetry SDK natively, the sidecar
-is removed and the change is recorded in `DECISIONS.md`.
+is removed and the change is recorded in the [change log](#change-log-adr-lite).
 
 ## D15. Evidence is bundled before ranking, not after
 
@@ -115,10 +124,32 @@ no security-fault injection. If a piece of work appears to need any of these, st
 
 ---
 
+## Change log (ADR-lite)
+
+Format: **ID · date · decision · why · alternatives · status** (`proposed` / `approved by supervisor`)
+
+### Approved
+
+- **D-Setup** · 2026-10-05 · Step 0 only creates skeletons and tooling; no functional code in this phase. K8s testbed lives in `make up` (Step 1). docker-compose covers only Redis and PostgreSQL. Functional code lands phase by phase per `docs/PROGRESS.md`. · Why: verifiable scaffold without violating D3/D5 prematurely. · Alternatives: full stack in Step 0 (rejected). · Status: approved by the team; supervisor follow-up in next sync.
+
+### Proposed deviations from the July 2026 proposal (supervisor approval pending)
+
+These are already reflected in `CLAUDE.md` and implementation docs; status moves to **approved**
+when the supervisor signs off.
+
+- **D2 (wording)** · Proposal used ambiguous “upstream”; repo locks caller→callee and walk toward callees (see [D2](#d2-dependency-graph-orientation-and-rca-walk-direction) above).
+- **D5** · Online Boutique / OTel Demo instead of Sock Shop.
+- **D6** · 5 runs per scenario (proposal: 3); fault-free soak; FPR = false alarms/hour on soak.
+- **D7** · Stronger RCA baselines + LLM-only baseline.
+- **NFR** · Throughput targets (10k logs/s, 5k spans/s) → load-test numbers on the actual machine.
+- **Timeline** · Phase 9 (paper, 3–4 weeks); re-baseline dates from real start date.
+
+---
+
 ## How a new decision lands
 
-1. Open a `docs/` PR with a new `DECISIONS.md` entry (date, change, trigger, sign-off).
-2. Update this file if the decision is durable — give it the next `D-NN`.
+1. Open a `docs/` PR with a new [change log](#change-log-adr-lite) entry (date, change, trigger, sign-off).
+2. Update this file if the decision is durable — give it the next `D-NN` section.
 3. If the decision changes a public contract (a signal schema, an API endpoint, a scenario
    shape), update `ARCHITECTURE.md` and the relevant module's `README.md` in the same PR.
 4. Decisions touching RCA, evaluation, or the testbed need supervisor sign-off before merge.

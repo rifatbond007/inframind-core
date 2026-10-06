@@ -24,7 +24,7 @@ RCA (dependency graph, evidence aggregator, change correlation, ranking) ->
 Explanation + Alerting (LLM summary, dedup, severity router, payload) ->
 Storage (PostgreSQL incidents + audit log).
 
-## Locked design decisions (change only via docs/DECISIONS.md + user approval)
+## Locked design decisions (change only via docs/decision-tree.md change log + user approval)
 - D1. **RCA is deterministic.** The LLM only summarizes evidence. It never picks the root cause.
 - D2. Dependency graph is a NetworkX DiGraph with edges **caller -> callee**. Failures propagate callee -> caller, so RCA starts at the symptom service and walks **toward its callees**. Never say "upstream" without defining it.
 - D3. Detection is statistical (Z-score, EWMA, percentile, error-rate spike). No deep learning training (out of scope).
@@ -53,10 +53,10 @@ Organized by category under `.claude/agents/<category>/`:
 - **writing/**: `literature-scout`, `reference-verifier`, `paper-writer`, `paper-reviewer`, `docs-writer`
 
 ## Skills (see .claude/skills/) — use them, don't reinvent
-commit-protocol, phase-gates, python-standards, signal-schema, add-collector, add-detector, rca-scoring, llm-evidence-explainer, testbed-ops, fault-scenario, run-evaluation, helm-packaging, paper-writing, reference-verification, results-to-latex
+Entrypoints link to `docs/standards/` (see `docs/AGENT_WORKFLOW.md`). List: commit-protocol, phase-gates, python-standards, signal-schema, add-collector, add-detector, rca-scoring, llm-evidence-explainer, testbed-ops, fault-scenario, run-evaluation, helm-packaging, paper-writing, reference-verification, results-to-latex
 
-## Slash commands
-/status · /start-phase · /commit · /review · /new-scenario · /run-eval · /verify-refs · /draft-section
+## Agent workflow (Cursor)
+Follow [`docs/AGENT_WORKFLOW.md`](docs/AGENT_WORKFLOW.md): read progress, pick one agent, load its skill, work on `dev-rifat` / `dev-moneem` / `dev-prome`, gates green, then commit. Skills point at `docs/standards/`. Phase checklists: `phase-gates` skill.
 
 ## Definition of Done (any task)
 1. Code + type hints + docstrings on public functions. 2. Unit tests written and passing. 3. `make lint` clean.
@@ -67,5 +67,5 @@ commit-protocol, phase-gates, python-standards, signal-schema, add-collector, ad
 - kubectl/helm only against `kind-*` contexts.
 - Never invent a number, citation, or result. Paper numbers come only from `evaluation/results/`.
 - Do not expand scope beyond D8. If a task needs it, stop and ask.
-- Before big work, read docs/PROGRESS.md and docs/DECISIONS.md. After work, update PROGRESS.md.
+- Before big work, read `docs/PROGRESS.md` and `docs/decision-tree.md`. After work, update `docs/PROGRESS.md`.
 - When unsure about a requirement, ask one focused question instead of guessing.
