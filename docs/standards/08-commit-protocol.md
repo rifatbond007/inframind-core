@@ -43,59 +43,62 @@ Examples:
 - `eval(scenario): add 001-pod-kill-frontend`
 - `chore(ruff): bump to 0.6.0`
 
-### 8.2.1 Author — pinned name, no AI co-authorship
+### 8.2.1 Author — the rule, not the roster
 
-The commit author is a **person** on the team, identified by their **GitHub
-username**, never a display name. Pinned rules:
+The commit author is a **person**, identified by their **GitHub username**.
+The roster is not pinned here; pinning a roster would force a docs change
+every time someone joins or leaves. What is pinned is the shape of the
+identity, which the email proves.
 
-1. **`git config user.name` is the GitHub username** (lowercase, exactly as it
-   appears on the user's GitHub profile). For this team:
-   - `rifatbond007` (Rifat — testbed, deploy, scripts)
-   - `moneem-07` (Moneem — ingestion, detection, correlation, tests)
-   - `promerayhan` (Prome — RCA, LLM, alerting, storage, API, evaluation)
+Rules:
 
-   No display names (`"Md. Rifat Hossain"`, `"Abdullah All Moneem"`,
-   `"Rayhan Islam Prome"`). The `name` field on a commit is the **login**, not
-   the human-readable name. This is a hard rule — a reviewer who sees
-   `git log --format='%an'` return a display name rejects the PR.
-
-2. **`git config user.email` is the `noreply` email** of that GitHub account:
+1. **`git config user.email` is the GitHub `noreply` email** —
    `<username>@users.noreply.github.com`. This is the only acceptable author
-   email on this repo. No private email addresses.
+   email on this repo, and it is what GitHub uses to attribute the commit on
+   the PR, the contributor graph, and `git log`. A private email address is
+   rejected.
 
-3. **No `Co-authored-by:` trailer for AI tools or agents.** Tooling that
+2. **`git config user.name` is the GitHub username** — the local-part of
+   that noreply email, lowercase, exactly as it appears on the user's GitHub
+   profile. Not a display name. A reviewer who sees
+   `git log -1 --format='%an <%ae>'` and reads a human-readable display name
+   instead of the email's local-part rejects the PR. The
+   `check_commit_message.py` hook (D24) verifies `user.name == email_localpart`
+   before the commit lands.
+
+3. **No `Co-authored-by:` trailer for any AI tool or agent.** Tooling that
    auto-appends `Co-Authored-By:` trailers (Claude Code, Puku-CLI, Cursor,
-   GitHub Copilot, Codex, JetBrains AI, etc.) must have the trailer removed
-   before commit. The pre-commit hook `check_commit_message.py` (D24) enforces
-   this. A commit message that credits a tool as a co-author is rejected.
+   GitHub Copilot, Codex, JetBrains AI, or any other name matching `*<bot>*`)
+   must have the trailer removed before commit. The hook rejects any
+   `Co-authored-by:` whose local-part matches a known AI tool name, a
+   `*<bot>*` pattern, or any address other than a `<username>@users.noreply.github.com`
+   from the same team. This overrides any harness or tool default that would
+   append such a trailer.
 
-4. **No `Co-authored-by:` trailer for any other human without their consent.**
-   If two humans genuinely co-authored a commit, both names appear in the
+4. **No `Co-authored-by:` trailer for a second human without their consent.**
+   If two humans genuinely co-authored a change, both names appear in the
    body of the message, not as a trailer. The trailer form is reserved for the
-   rare case where GitHub's web UI adds it for a verified pair-commit.
+   rare case where GitHub's web UI adds it for a verified pair-commit, and
+   even then the email must be a `<username>@users.noreply.github.com` from
+   the team.
 
-**Why the username, not the display name:** GitHub's `noreply` email only
-guarantees the username, not the display name. A display name can be changed
-at any time in profile settings; a username cannot (and is what the team
-recognises in PRs, code-review assignments, and the audit log). Keeping the
-commit author identical to the GitHub login also makes the
-`docs/PROGRESS.md` "who" column match `git log --format='%an' %ae` without
-fuzzy matching.
+**Why this shape, not a roster:** GitHub's `noreply` email attests to the
+username, not the display name. A display name can be changed in profile
+settings at any time; a username cannot, and it is the identity the team
+recognises in PRs, code review, and the audit log. Verifying
+`user.name == email_localpart` is mechanical, has no per-person list to
+maintain, and scales to any team size without touching this file.
 
-**Check before commit:**
-
-```bash
-git config user.name    # must print a GitHub username, not a display name
-git config user.email   # must print <username>@users.noreply.github.com
-```
-
-A local-only fix is enough — the change is per-repo and does not need
-`--global`:
+**Per-author setup, once per machine per repo:**
 
 ```bash
-git config --local user.name "rifatbond007"
-git config --local user.email "rifatbond007@users.noreply.github.com"
+git config --local user.name "<github-username>"
+git config --local user.email "<github-username>@users.noreply.github.com"
 ```
+
+The local-only form is preferred; the global form is acceptable but
+overrides per-repo, and other repos on the same machine may want a different
+identity.
 
 ## 8.3 Before every commit — the local pre-flight
 
