@@ -29,6 +29,7 @@ A PR has been opened (or you are asked to review staged changes). Read:
 - [ ] **D8:** No cloud-only code paths. No Datadog / PagerDuty imports.
 - [ ] **D9:** Redaction happens **before** any text hits the LLM. Ollama fallback works without one.
 - [ ] **Hard rules:** No secrets, no `--no-verify`, no force-push, no direct push to `main`, no kubectl outside `kind-*` contexts.
+- [ ] **D25 — author is a GitHub username, not a display name, and no AI `Co-Authored-By`.** Run `git log -1 --format='%an <%ae>'` on the PR head. The `name` field MUST equal one of `rifatbond007`, `moneem-07`, `promerayhan`. The `email` MUST be `<that-username>@users.noreply.github.com`. Inspect the raw commit message for `Co-authored-by:` trailers — any whose local-part matches an AI tool (`claude`, `claude-code`, `puku`, `puku-cli`, `cursor`, `github-copilot`, `codex`, `jetbrains-ai`) or any `*<bot>*` pattern is a rejection. See `docs/standards/08-commit-protocol.md` section 8.2.1 and `docs/decision-tree.md` D25.
 - [ ] **Tests:** New public functions have tests. Changes to RCA / detection / evaluation are reproducible from `scenario_id + seed`.
 - [ ] **Lint:** `make lint` is clean locally. CI must be green.
 - [ ] **Docs:** `docs/PROGRESS.md` log entry added.

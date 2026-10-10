@@ -43,10 +43,59 @@ Examples:
 - `eval(scenario): add 001-pod-kill-frontend`
 - `chore(ruff): bump to 0.6.0`
 
-### 8.2.1 Author
+### 8.2.1 Author — pinned name, no AI co-authorship
 
-The commit author is the GitHub account behind the author email. Do not add a
-`GitHub-Author:` line or a `Co-authored-by:` trailer for tools.
+The commit author is a **person** on the team, identified by their **GitHub
+username**, never a display name. Pinned rules:
+
+1. **`git config user.name` is the GitHub username** (lowercase, exactly as it
+   appears on the user's GitHub profile). For this team:
+   - `rifatbond007` (Rifat — testbed, deploy, scripts)
+   - `moneem-07` (Moneem — ingestion, detection, correlation, tests)
+   - `promerayhan` (Prome — RCA, LLM, alerting, storage, API, evaluation)
+
+   No display names (`"Md. Rifat Hossain"`, `"Abdullah All Moneem"`,
+   `"Rayhan Islam Prome"`). The `name` field on a commit is the **login**, not
+   the human-readable name. This is a hard rule — a reviewer who sees
+   `git log --format='%an'` return a display name rejects the PR.
+
+2. **`git config user.email` is the `noreply` email** of that GitHub account:
+   `<username>@users.noreply.github.com`. This is the only acceptable author
+   email on this repo. No private email addresses.
+
+3. **No `Co-authored-by:` trailer for AI tools or agents.** Tooling that
+   auto-appends `Co-Authored-By:` trailers (Claude Code, Puku-CLI, Cursor,
+   GitHub Copilot, Codex, JetBrains AI, etc.) must have the trailer removed
+   before commit. The pre-commit hook `check_commit_message.py` (D24) enforces
+   this. A commit message that credits a tool as a co-author is rejected.
+
+4. **No `Co-authored-by:` trailer for any other human without their consent.**
+   If two humans genuinely co-authored a commit, both names appear in the
+   body of the message, not as a trailer. The trailer form is reserved for the
+   rare case where GitHub's web UI adds it for a verified pair-commit.
+
+**Why the username, not the display name:** GitHub's `noreply` email only
+guarantees the username, not the display name. A display name can be changed
+at any time in profile settings; a username cannot (and is what the team
+recognises in PRs, code-review assignments, and the audit log). Keeping the
+commit author identical to the GitHub login also makes the
+`docs/PROGRESS.md` "who" column match `git log --format='%an' %ae` without
+fuzzy matching.
+
+**Check before commit:**
+
+```bash
+git config user.name    # must print a GitHub username, not a display name
+git config user.email   # must print <username>@users.noreply.github.com
+```
+
+A local-only fix is enough — the change is per-repo and does not need
+`--global`:
+
+```bash
+git config --local user.name "rifatbond007"
+git config --local user.email "rifatbond007@users.noreply.github.com"
+```
 
 ## 8.3 Before every commit — the local pre-flight
 
