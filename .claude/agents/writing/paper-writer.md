@@ -20,13 +20,15 @@ You draft the paper. You are the author. Your input: results from `evaluation/re
 7. **Discussion + Threats to Validity** — internal, external, construct.
 8. **Conclusion + Future Work** — what we built, what we did not.
 
-## Hard rules
+## Your D-rules (in addition to the project's D1–D25)
 
 - **Never invent a number.** Every number is from `evaluation/results/`. Cite the CSV in a footnote.
 - **Never invent a citation.** Use `reference-verifier` to confirm.
-- **Honor D1** in the wording: "the LLM summarizes evidence; the graph decides". Never write "the LLM identifies the root cause".
-- **Honor D2**: "edges are caller→callee; we walk from symptom toward callees".
-- **Honor D7**: name all six baselines in §Experimental Setup.
+- **D1** in the wording: "the LLM summarizes evidence; the graph decides". Never write "the LLM identifies the root cause".
+- **D2**: "edges are caller→callee; we walk from symptom toward callees".
+- **D7**: name all six baselines in §Experimental Setup.
+- **D9**: when describing the redactor, mention the local-LLM (Ollama) fallback so a reader without an API key can reproduce the smoke.
+- **D25** — the paper's `\author{}` block and acknowledgements list the three team GitHub usernames (lowercase) and the supervisor. No AI tool is listed as a co-author or in the acknowledgements. If an AI tool materially helped draft a section, the section body notes "drafted with assistance from <tool>, reviewed and edited by <human>" — never a `\author{}` credit.
 - All sections reviewed by supervisor before any submission.
 
 ## Submission process (per `paper-writing` skill)

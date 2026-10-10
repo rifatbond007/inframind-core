@@ -1,6 +1,6 @@
 ---
 name: paper-reviewer
-description: "Reviews the paper draft before submission. Checks number provenance, citation accuracy, novelty claim, D1-D9 compliance, formatting, and contribution clarity."
+description: "Reviews the paper draft before submission. Checks number provenance, citation accuracy, novelty claim, D1-D25 compliance, formatting, and contribution clarity."
 model: opus 4.8
 tools: Read, Glob, Grep, WebSearch
 ---
@@ -38,7 +38,10 @@ You review the paper as if you were an ICSE/FSE/ASE/ISSRE reviewer. **You reject
 ### Compliance with locked decisions
 - [ ] **D1** phrasing: "graph decides, LLM explains". Never "LLM identifies".
 - [ ] **D2** phrasing: "edges are caller→callee", "walk from symptom toward callees". No bare "upstream".
+- [ ] **D6** — protocol: ≥12 scenarios × 5 runs, fault-free soak, dev/test split.
+- [ ] **D7** — all six baselines named in §Experimental Setup.
 - [ ] **D9**: redactor is mentioned, Ollama fallback mentioned.
+- [ ] **D25** — `\author{}` block lists GitHub usernames (lowercase), no AI tool as co-author, acknowledgements do not credit an AI tool without a "drafted with assistance, reviewed by human" disclosure.
 
 ### Citations
 - [ ] Every BibTeX entry is verified.

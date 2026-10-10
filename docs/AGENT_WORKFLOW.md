@@ -77,7 +77,10 @@ flowchart TB
     DW -.-> plan
 ```
 
-Build order follows the pipeline: testbed, then signals, detection, correlation, RCA, explanation, alerts and storage, packaging, then evaluation and the paper. `test-writer` rides along with every build agent. `code-reviewer` runs before a pull request. `docs-writer` updates docs whenever a contract changes.
+The arrows show **phase ordering**, not call direction. Each agent is
+**invoked independently** by a human owner — agents do not dispatch one
+another. `test-writer` and `code-reviewer` ride along with every build
+agent; `docs-writer` updates docs whenever a contract changes.
 
 ## 4. Agent, owner, skill, phase
 
@@ -91,7 +94,7 @@ Build order follows the pipeline: testbed, then signals, detection, correlation,
 | `correlation-engineer` | Moneem | `signal-schema` | P4b |
 | `rca-engineer` | Prome | `rca-scoring` | P5 |
 | `llm-explainer` | Prome | `llm-evidence-explainer` | P5b |
-| `alerting-storage-engineer` | Prome | `signal-schema` | P6 |
+| `alerting-storage-engineer` | Prome | `signal-schema` | P6 (alerting + storage + API) |
 | `devops-packager` | Rifat | `helm-packaging` | P8 |
 | `test-writer` | owner of the change | `python-standards` | every |
 | `code-reviewer` | reviewer | `commit-protocol` | every PR |
@@ -140,7 +143,11 @@ Files: `.claude/agents/<category>/<name>.md`.
 | `dev` | integration PRs from the three branches above |
 | `main` | milestone PRs from `dev` only |
 
-Paper and docs agents commit on the branch of whoever is writing that day, then PR into `dev`.
+Paper and docs agents commit on the branch of whoever is writing that day,
+then PR into `dev`. The `docs-writer` agent has no fixed owner branch —
+docs-only PRs land on whichever branch the affected code lives on, or on
+`dev` for cross-cutting changes. `paper-*` and `literature-scout` agents
+follow the same rule.
 
 ## 7. Proposal deltas the agents must keep
 

@@ -57,6 +57,11 @@ You are the **project planner** for the InfraMind BSc capstone (BAIUST CSE, supe
 - A short paragraph stating the next 1–2 weeks of work, who owns it, and which dependencies unblock first.
 - A diff-style update to `docs/PROGRESS.md` (use Edit tool; preserve the table).
 - If a new decision appears, draft an entry for `docs/decision-tree.md` (change log) and flag for supervisor approval.
+- **Agent-layer sync rule.** When a new D-NN is added to `docs/decision-tree.md` (or a standard under `docs/standards/` is changed), the agent file(s) that own the affected code MUST be updated in the same PR. This is a phase-gate item; the PR is incomplete if the agent file drift remains. Specifically:
+  - D-rules for the affected area → added to the owning agent's `## Your D-rules` section.
+  - New env keys / stream names / contract names → named in the agent's component list.
+  - Changed cross-module behaviour (e.g. D21 changed who owns the graph) → reflected in the agent's "When invoked" steps.
+  - The change is verified by the `code-reviewer` agent on the next PR touching that area.
 
 ## How to respond
 

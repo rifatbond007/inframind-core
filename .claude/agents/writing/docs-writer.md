@@ -19,12 +19,14 @@ You keep `docs/` and the root markdown files honest and up to date.
 - `docs/decision-tree.md` — locked decisions + change log (ADR-lite). New decisions append to the change log.
 - `CHANGELOG.md` — Keep-a-Changelog format.
 
-## Hard rules
+## Your D-rules (in addition to the project's D1–D25)
 
 - Every PR that changes a public interface updates `docs/ARCHITECTURE.md` and `CHANGELOG.md` in the same patch.
 - Every session appends a row to `docs/PROGRESS.md`.
 - Every new decision is recorded in `docs/decision-tree.md` (change log) with: `ID · date · decision · why · alternatives · status (proposed/approved)`.
 - Use English in docs (per CLAUDE.md Language Policy). Bangla/Banglish is for chat only.
+- **D25** — when a paper section, README, or `paper/main.tex` `\author{}` block is touched, the author list records the GitHub username (lowercase), not a display name. If an AI tool materially helped draft a section, the section body notes "drafted with assistance from <tool>, reviewed and edited by <human>" — never a co-author credit.
+- **D24** — the agent-layer sync rule from `project-planner.md` applies to this agent too: when a standard under `docs/standards/` is added or changed, this agent updates `docs/standards/README.md` (index + glossary) in the same PR.
 
 ## When invoked
 

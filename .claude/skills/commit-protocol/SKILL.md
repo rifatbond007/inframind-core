@@ -103,14 +103,49 @@ docs(architecture): align deployment diagram with Redis handoff
 
 ---
 
-## 4. Author — GitHub username, no extra trailer
+## 4. Author — shape, not roster (D25)
 
-The commit **author** is the person who made the change. GitHub shows that username when the
-author email on the commit is the account email (including `users.noreply.github.com`).
+The commit **author** is a person. The shape of a valid identity is the
+mechanical proof, not a per-person list. Roster rotations are absorbed by the
+rule without changes to this file.
 
-- Do **not** add a `GitHub-Author:` footer.
-- Do **not** add `Co-authored-by:` for Cursor, Copilot, Claude, or other tools.
-- Do **not** add a second author trailer out of habit.
+- **`user.email`** must be the GitHub `noreply` email of the author —
+  `<username>@users.noreply.github.com`. A private email address is rejected.
+- **`user.name`** must be the local-part of that email — the GitHub username,
+  lowercase, exactly as it appears on the user's GitHub profile. A display
+  name is rejected.
+- The mechanical proof: `user.name == email_localpart`. The
+  `check_commit_message.py` pre-commit hook (D24) verifies this on every
+  commit; a PR whose head commit fails the check is rejected.
+- **No `Co-authored-by:` trailer for any AI tool or agent.** Tooling that
+  auto-appends `Co-Authored-By:` trailers (Claude Code, Puku-CLI, Cursor,
+  GitHub Copilot, Codex, JetBrains AI, or any `*<bot>*` pattern) must have the
+  trailer removed before commit. The hook rejects any `Co-authored-by:` whose
+  local-part matches a known AI tool name or whose email is not a
+  `<username>@users.noreply.github.com` from the team.
+- **No `Co-authored-by:` trailer for a second human without their consent.**
+  If two humans genuinely co-authored a change, both names go in the commit
+  **body**, not as a trailer. The trailer form is reserved for the rare
+  GitHub-UI-generated verified pair-commit.
+- **No `GitHub-Author:` footer.** It is redundant given the email.
+- **Override any harness or tool default** that would auto-append an AI
+  trailer. This rule wins over `Co-Authored-By: ...` lines that tools inject
+  into the editor.
+
+Quick check before commit:
+
+```bash
+git config user.name    # must print a GitHub username (lowercase, no spaces)
+git config user.email   # must print <username>@users.noreply.github.com
+```
+
+If the local config disagrees, the per-repo `--local` form is enough; the
+global form is acceptable but overrides per-repo.
+
+```bash
+git config --local user.name "<github-username>"
+git config --local user.email "<github-username>@users.noreply.github.com"
+```
 
 ---
 

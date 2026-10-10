@@ -7,6 +7,13 @@ description: What must be true before moving from one phase to the next in Infra
 
 You cannot start phase N+1 until phase N's gate is green.
 
+A new gate applies to **every** phase transition, including this one: if a
+PR changes a standard under `docs/standards/` or adds a D-NN to
+`docs/decision-tree.md`, the agent file(s) that own the affected code are
+updated in the **same PR**. A PR that changes a standard but leaves the
+matching agent file stale is incomplete; the gate is red. This rule is
+owned by the `project-planner` agent (D-change discipline).
+
 ## P0 → P1 (repo → testbed)
 
 - [ ] `pyproject.toml`, `Makefile`, CI green.
@@ -31,7 +38,9 @@ You cannot start phase N+1 until phase N's gate is green.
 
 - [ ] At least Prometheus + Alertmanager collectors end-to-end.
 - [ ] Loki + OTel collectors surface sync.
-- [ ] Service dependency graph is being updated from live traces.
+- [ ] The Jaeger / OTel collector emits `GraphUpdate` events on the pinned
+      Redis stream `stream:graph-updates` (D21). The graph itself is owned by
+      the RCA worker; ingestion does not mutate it.
 
 ## P4 → P5 (detection → RCA)
 
