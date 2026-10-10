@@ -43,8 +43,11 @@ symbol. Applies to every doc in `docs/`.
 | 10 | [Evaluation](10-evaluation.md) | `make eval SCENARIO=<id>`. ≥12 scenarios x 5 reps + fault-free soak (D6). 6 baselines (D7). Dev/test split — never tune on test. Every scenario has `seed`. |
 | 11 | [Helm packaging](11-helm-packaging.md) | `deploy/helm/inframind/`. No real secrets in `values.yaml`. Read-only RBAC. `helm lint` before commit. |
 | 12 | [Paper writing](12-paper-writing.md) | IEEE conference, 6–8 pages, LaTeX. Never invent a number (cite the CSV). Never invent a citation (use `reference-verifier`). Honour D1, D2, D7 in the wording. |
+| 13 | [Service graph contract](13-service-graph-contract.md) | `ServiceGraph` is the canonical graph primitive, owned by the RCA worker (one replica). Edges `caller -> callee`, EWMA-weighted. Updated by the OTel / Jaeger collector over the pinned Redis stream `stream:graph-updates`. Cold-start from `RCA_GRAPH_PATH`. D21. |
+| 14 | [Change correlation](14-change-correlation.md) | The RCA `w4` term. K8s API watch on Deployments / ConfigMaps / Secrets / HPA / StatefulSets / DaemonSets, scoped to `INFRAMIND_WATCH_NAMESPACES`. No Secret values stored. 30-minute pre-window, recency-weighted soft saturation, float in `[0, 1]`. Append-only `change_events` Postgres table. D22. |
+| 15 | [Enforcement hooks](15-enforcement-hooks.md) | Three pre-commit hooks required: dependency-DAG check, commit-trailer ban, PROGRESS.md row check. Rollout in `--simulate` mode for one week per hook before enforcing. New top-level `scripts/` directory permitted for dev-time tooling. D23-Scripts, D24-Hooks. |
 
-**Structure** 01  **Code craft** 02 · 03 · 04 · 05 · 06 · 07  **Process** 08 · 09 · 10 · 11  **Paper** 12
+**Structure** 01  **Code craft** 02 · 03 · 04 · 05 · 06 · 07  **Process** 08 · 09 · 10 · 11 · 15  **Architecture** 13 · 14  **Paper** 12
 
 ---
 
@@ -98,6 +101,9 @@ Universal terms. Domain vocabulary stays in the relevant section.
 | **Reproduction seed** | The `seed` field on every scenario. Required. |
 | **Hard rule** | A rule that cannot be overridden without supervisor sign-off and a new entry in `docs/decision-tree.md` (change log). |
 | **Soft rule** | A convention. May be deviated from with a comment explaining why. |
+| **ServiceGraph** | The canonical service dependency graph primitive (D21). A `networkx.DiGraph` with `caller -> callee` edges, weighted by `p95_latency_ms * log(call_count)` over the last 100 samples (α = 0.1 EWMA). Lives in-memory in the RCA worker. Updated over the pinned Redis stream `stream:graph-updates`. Spec: [13-service-graph-contract](13-service-graph-contract.md). |
+| **GraphUpdate** | The event type the OTel / Jaeger collector emits to `stream:graph-updates`. Carries `(caller, callee, latency_ms, observed_at)`. A `GraphUpdate` is added to the in-memory graph only after `GRAPH_MIN_OBSERVATIONS` (default 3) observations of the same edge. Spec: [13-service-graph-contract](13-service-graph-contract.md) section 13.2. |
+| **`CHANGE_CORRELATION_PRE_WINDOW_S`** | The configurable pre-window (default 1800 s = 30 min) used by the `change_correlation` algorithm when correlating K8s change events with a candidate root cause. Tuned on the dev split per D6. Spec: [14-change-correlation](14-change-correlation.md) section 14.7. |
 
 ---
 

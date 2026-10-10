@@ -111,6 +111,78 @@ Postgres holds incidents, evidence, RCA results, and the append-only audit log. 
 is the conduit between stages — it is **not** a source of truth. If Postgres is unavailable,
 the system refuses to acknowledge an incident rather than silently dropping it.
 
+## D21. The service graph is a `ServiceGraph` primitive owned by the RCA worker
+
+The service dependency graph is a single, pinned primitive called `ServiceGraph`. Its shape
+is a `networkx.DiGraph` with edges `caller -> callee` (D2). The **authoritative live copy**
+lives in-memory in the **RCA worker** (`src/inframind/rca/graph.py`); it is the only
+consumer on the request path. The cold-start seed is `RCA_GRAPH_PATH` (default
+`data/service-graph.json`). Live updates arrive from the OTel / Jaeger collector over a
+**pinned Redis stream** named `stream:graph-updates` — a new pinned key alongside
+`stream:signals` and `stream:incidents`.
+
+Edges are weighted by `p95_latency_ms * log(call_count)`, exponentially weighted moving
+average with α = 0.1 over the last 100 samples. An edge is added only after
+`GRAPH_MIN_OBSERVATIONS` (default 3) observations. Edges that are not re-observed within
+`2 * GRAPH_DECAY_HALF_LIFE_S` are removed. The on-disk snapshot is taken every 60 s and
+on `SIGTERM`. A corrupt snapshot is logged at `ERROR` and replaced by the cold-start path;
+the worker never crashes on a bad snapshot.
+
+**Trigger to revisit:** if the project scales to multiple RCA replicas, the watcher
+section ownership and the snapshot protocol change. That is a D-change.
+
+## D22. `change_correlation` is the RCA `w4` term, sourced from a K8s API watch
+
+The fourth term of the RCA scoring formula (section 6.4) is `w4 * change_correlation`. The
+data source is a single K8s API watch on `Deployment`, `StatefulSet`, `DaemonSet`,
+`ConfigMap`, `Secret`, and `HorizontalPodAutoscaler` resources, scoped to the namespaces
+listed in `INFRAMIND_WATCH_NAMESPACES`. The watch is run in-process by the RCA worker pod
+(no separate `Deployment`).
+
+A change event captures metadata only: the resource kind, the resource name, the service
+name (canonical), the revision, the previous revision, and the change time. **No `Secret`
+value is ever stored, logged, or sent to the LLM** (D9). The watcher's `Role` extends the
+existing read-only `Role` from section 11.5 with `secrets` `get` / `list` / `watch` only —
+no write verbs, no `pods/exec`.
+
+The correlation algorithm uses a 30-minute pre-window
+(`CHANGE_CORRELATION_PRE_WINDOW_S`, default 1800 s) before `incident.opened_at`, with
+recency-weighted soft saturation. The result is a float in `[0, 1]`. The
+`change_events` Postgres table is append-only (D20); no `UPDATE`, no `DELETE`.
+
+**Trigger to revisit:** if the project ever scales to multiple RCA replicas, the watcher
+becomes a separate `Deployment` with one replica. That is a D-change.
+
+## D23-Scripts. A new top-level `scripts/` directory is permitted for dev-time tooling
+
+A top-level `scripts/` directory is permitted. It holds dev-time tooling — currently the
+three pre-commit enforcement hooks (D24). The directory is **not part of the runtime**: it
+is excluded from the Docker image, the Python package, the Helm chart, and the testbed
+manifests. It is owned by the testbed-engineer (Rifat) by default; a different owner can be
+set in `CODEOWNERS`.
+
+**Trigger to revisit:** if a non-dev-time script ever needs to land under `scripts/` (e.g.
+a runtime installer), the directory's scope changes. That is a D-change.
+
+## D24-Hooks. Three pre-commit hooks enforce the standards
+
+Three pre-commit hooks are required:
+
+- **`check_imports.py`** enforces the dependency DAG (section 1.3). Per-line
+  `# noqa: dag-violation` is the documented exemption, matching the existing `noqa`
+  discipline.
+- **`check_commit_message.py`** enforces the trailer ban (section 8.2.1). A Python
+  allow-list of human GitHub usernames defines who can appear in a `Co-authored-by:`
+  trailer; tooling (Cursor, Copilot, Claude, etc.) is always rejected.
+- **`check_progress.py`** enforces the PROGRESS.md row requirement (section 8.4). A
+  code-touching commit must touch `docs/PROGRESS.md` in the same commit, or the most
+  recent row in `PROGRESS.md` must be dated within `PROGRESS_GRACE_DAYS` (default 7).
+
+All three run locally (first line of defense) and in CI (second line). The rollout is
+staged: each hook lands in `--simulate` mode for one week before flipping to enforce.
+
+**Trigger to revisit:** adding a fourth hook or weakening an existing one is a D-change.
+
 ## D-Setup. Step 0 only scaffolds the repo
 
 Step 0 (this phase) creates the module skeletons, tooling, CI, and dev compose. No functional
@@ -131,6 +203,14 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 ### Approved
 
 - **D-Setup** · 2026-10-05 · Step 0 only creates skeletons and tooling; no functional code in this phase. K8s testbed lives in `make up` (Step 1). docker-compose covers only Redis and PostgreSQL. Functional code lands phase by phase per `docs/PROGRESS.md`. · Why: verifiable scaffold without violating D3/D5 prematurely. · Alternatives: full stack in Step 0 (rejected). · Status: approved by the team; supervisor follow-up in next sync.
+
+- **D21** · 2026-10-11 · The service dependency graph is a single pinned primitive called `ServiceGraph`, owned by the RCA worker (one replica), with edges `caller -> callee`, weighted by `p95_latency_ms * log(call_count)` over the last 100 samples (α = 0.1 EWMA). Cold-start seed from `RCA_GRAPH_PATH`. Live updates from the OTel / Jaeger collector over the pinned Redis stream `stream:graph-updates`. Edges age out via `GRAPH_DECAY_HALF_LIFE_S`; an edge below `GRAPH_MIN_OBSERVATIONS` is held back. Snapshot every 60 s and on `SIGTERM`; corrupt snapshot -> cold start, never a crash. · Why: the graph is consumed by the RCA walker, the PageRank baseline, the correlation severity classifier, and the LLM evidence bundler — six call sites in total. Without a pinned primitive, every consumer invents its own, and a deviation is a silent scoring bug. The single-writer / single-reader model also satisfies the D6 reproducibility contract: same `scenario_id + seed` -> same `GraphUpdate` sequence -> same in-memory graph -> same ranking. · Alternatives: (a) rebuild the graph on every incident from raw traces — rejected for hot-path latency (1–5 ms per request). (b) Reuse `stream:signals` for graph updates — rejected because `GraphUpdate` has a different shape and a different consumer lifecycle. (c) Store the live copy in Postgres — rejected because the ranker needs O(1) edge access, not a SQL round-trip. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/13-service-graph-contract.md`.
+
+- **D22** · 2026-10-11 · `change_correlation` is the pinned algorithm for the RCA `w4` term. Source is a single in-process K8s API watch on `Deployment`, `StatefulSet`, `DaemonSet`, `ConfigMap`, `Secret`, `HorizontalPodAutoscaler` (filtered to `.spec.template`, `.data`, `.spec.replicas` respectively), scoped to `INFRAMIND_WATCH_NAMESPACES`. Captures metadata only — **no Secret values stored**. Correlation uses a 30-minute pre-window (`CHANGE_CORRELATION_PRE_WINDOW_S`) before `incident.opened_at`, with recency-weighted soft saturation, returning a float in `[0, 1]`. The `change_events` Postgres table is append-only (D20). The watcher's `Role` extends the existing read-only `Role` (section 11.5) with `secrets` `get` / `list` / `watch` only — no write verbs, no `pods/exec`. · Why: the `w4` term is named and weighted in section 6.4 but had no algorithm. Without a pinned spec, every implementation invents its own and the D6 reproducibility contract breaks at the `w4` term. The K8s API watch (not the audit log) matches the existing read-only RBAC scope with a minimal extension. · Alternatives: (a) Watch the audit log — rejected for being more privileged than needed. (b) Poll the K8s API on a timer — rejected because polling misses bursts of changes between polls. (c) Use a sidecar — rejected because it adds a new `Deployment` with its own lifecycle for a single consumer. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/14-change-correlation.md`.
+
+- **D23-Scripts** · 2026-10-11 · A new top-level `scripts/` directory is permitted for dev-time tooling only. Currently holds the three pre-commit enforcement hooks (D24). Excluded from the Docker image, the Python package, the Helm chart, and the testbed manifests. Owned by testbed-engineer (Rifat) by default. · Why: the hook scripts are real Python with logic that deserves version control and a README. The alternative (inline as bash in `.pre-commit-config.yaml`) is unmaintainable past ~30 lines. Section 1.6 requires a D-number for any new top-level directory; this is the number. · Alternatives: (a) Hide the hooks under `.githooks/` — rejected because hidden dev-time tooling rots. (b) Put them under an existing dir (`tools/`, `dev/`) — rejected because they are scripts, not tools, and the names are misleading. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/15-enforcement-hooks.md` section 15.3.
+
+- **D24-Hooks** · 2026-10-11 · Three pre-commit hooks are required: `check_imports.py` (enforces the dependency DAG, section 1.3), `check_commit_message.py` (enforces the trailer ban, section 8.2.1), `check_progress.py` (enforces the PROGRESS.md row requirement, section 8.4). All three run locally (first line) and in CI (second line). Rollout is `--simulate` mode for one week per hook before enforcing. Per-line `# noqa: dag-violation` is the documented DAG exemption. The `Co-authored-by:` allow-list is a Python list in `check_commit_message.py` — adding a human co-author is a PR that updates the script. `PROGRESS_GRACE_DAYS` defaults to 7. · Why: the standards have failed silently in past projects because they were enforced by reviewer discipline, not by tooling. The three rules in scope here (DAG, trailers, PROGRESS.md) are the ones that have failed. · Alternatives: (a) Enforce all at once with no rollout — rejected; rollout with `--simulate` is the proven way to surface false positives without blocking the team. (b) Use a third-party hook framework (pre-commit-hooks) — rejected; the rules are InfraMind-specific. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/15-enforcement-hooks.md` sections 15.4–15.6.
 
 ### Proposed deviations from the July 2026 proposal (supervisor approval pending)
 
