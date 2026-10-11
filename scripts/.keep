@@ -1,0 +1,11 @@
+# Marker for the D23-permitted `scripts/` directory.
+# This file exists so the dir is tracked even when it has no executable scripts.
+# D23-Scripts says: a top-level `scripts/` is permitted for dev-time tooling.
+# It is NOT part of the runtime: excluded from the Docker image, the Python
+# package, the Helm chart, and the testbed manifests.
+#
+# Real scripts in this directory:
+#   - lib/log.sh           (sourced helper, see slice 1 of P1)
+#   - check_imports.py     (D24 hook, lands in slice 5 of P1)
+#   - check_commit_message.py (D24 hook, lands in slice 5 of P1)
+#   - check_progress.py    (D24 hook, lands in slice 5 of P1)

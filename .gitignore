@@ -10,8 +10,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
-lib64/
+/lib/                        # root only — setuptools build output (NOT scripts/lib/)
+/lib64/                      # root only — setuptools build output
 parts/
 sdist/
 var/
@@ -56,6 +56,15 @@ kubeconfig.*
 kind-*.log
 kind-*.kubeconfig
 .kube/
+# Testbed-specific (Slice 2 writes a kubeconfig under testbed/.kube/; never commit)
+testbed/.kube/
+testbed/.kind/
+testbed/**/kubeconfig
+testbed/**/kubeconfig.*
+testbed/**/*.kubeconfig
+# Helm/cluster temporary artifacts
+.helm/
+charts/*.tgz
 
 # --- editors / OS ---
 .vscode/
