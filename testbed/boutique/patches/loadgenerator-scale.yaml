@@ -1,0 +1,23 @@
+# testbed/boutique/patches/loadgenerator-scale.yaml
+#
+# D3 FIX (continued): scale loadgenerator to 0 replicas for the
+# slim default. The 512Mi cap on the Python loadgen pod alone is
+# 1/14th of the Boutique budget on a 7 GiB host, and P1 doesn't
+# need a traffic driver — Slice 5's smoke test curls Boutique
+# directly with `kubectl exec` / NodePort port-forwards.
+#
+# If you want traffic (e.g. to exercise Prometheus scrapes or
+# Jaeger traces in a real run), bump `replicas` to 1 here. The
+# loadgenerator pod will start on its own and start hammering
+# / against `http://frontend:80`.
+#
+# References:
+#   - D3 (Boutique memory caps): docs/decision-tree.md
+#   - testbed/README.md §7 (memory profiles)
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: loadgenerator
+spec:
+  replicas: 0

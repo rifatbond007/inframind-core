@@ -1,0 +1,45 @@
+# testbed/chaos/stress-memory.yaml
+#
+# StressChaos: hold 200 MiB resident in the `cartservice` Pod
+# for 5 minutes. On a 7 GiB host with the 128 MiB upstream cap, this
+# should drive cartservice to OOMKill and re-create — exercising the
+# restart counter + Loki `Killing` log line in Prometheus/Loki.
+#
+# Used by:
+#   - P7 evaluation (memory-leak / OOM scenario)
+#   - P4 detection (error spike on the OOM event)
+#
+# Apply:
+#   kubectl --context kind-inframind apply -f testbed/chaos/stress-memory.yaml
+# Cleanup:
+#   kubectl --context kind-inframind delete -f testbed/chaos/stress-memory.yaml
+#
+# NB: 200 MiB on a 128 MiB-limit container = guaranteed OOM. The
+# pod will restart; the upstream cartservice has a 5s initialDelay on
+# the readiness probe, so the smoke-test assertion runs within 30s.
+#
+# References:
+#   - chart 2.7.2 docs: https://chaos-mesh.org/docs/simulate-memory-stress-on-kubernetes/
+#   - testbed/README.md §6 (troubleshooting OOMKilled)
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cartservice-memory-stress
+  namespace: chaos-testing
+spec:
+  mode: all
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      app: cartservice
+  stressors:
+    memory:
+      workers: 1
+      size: "200Mi"
+      time: "5m"
+      oomScoreAdj: 0
+  duration: "5m"
+  scheduler:
+    cron: "@every 20m"

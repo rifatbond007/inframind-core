@@ -1,0 +1,74 @@
+# testbed/boutique/kustomization.yaml
+#
+# Top-level kustomize for Online Boutique (the P1 system-under-test).
+#
+# Layout:
+#   base/    — vendored from github.com/GoogleCloudPlatform/microservices-demo
+#              tag v0.10.7 (commit pinned in base/ORIGIN.txt). 11 service
+#              manifests + their kustomization. The upstream kustomization
+#              is the one in base/kustomization.yaml — we don't import it
+#              because we want to interpose our own patches (D3, OTel, etc.)
+#              without fighting a nested `commonLabels:` / namespace.
+#   patches/ — our strategic-merge patches on top of base/.
+#
+# Why a top-level kustomization instead of editing base/ directly:
+#   - base/ is upstream code; we want `git diff` against v0.10.7 to stay
+#     empty so we can re-vendor cleanly.
+#   - the slim-default memory cap (D3) and any future OTel sidecar
+#     injection (D1, deferred to Slice 5 if needed) live in patches/.
+#   - the upstream kustomization hard-codes `loadgenerator` with 1 replica;
+#     we scale it to 0 for the slim default (P1 doesn't drive traffic).
+#
+# Acceptance (Slice 4):
+#   - `kubectl --context kind-inframind -n default get pods` shows 10
+#     Boutique pods Running (loadgenerator scaled to 0), plus
+#     `redis-cart-...` Running.
+#   - `curl -s http://localhost:8080/` (after `kubectl port-forward`) or
+#     direct NodePort on the frontend service returns Boutique HTML.
+#   - `kubectl get all -n default -l app=boutique` enumerates the 10
+#     deployments + services.
+
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Pull every service in from the vendored base. We do NOT `import: base/`
+# because that would bring in the upstream kustomization's settings
+# wholesale; we list the files directly so the top-level is the single
+# source of truth.
+resources:
+- base/adservice.yaml
+- base/cartservice.yaml
+- base/checkoutservice.yaml
+- base/currencyservice.yaml
+- base/emailservice.yaml
+- base/frontend.yaml
+- base/loadgenerator.yaml
+- base/paymentservice.yaml
+- base/productcatalogservice.yaml
+- base/recommendationservice.yaml
+- base/shippingservice.yaml
+
+# Apply the slim-default patches (D3). memory-patches.yaml caps every
+# service to a 7 GiB-host-safe budget; loadgenerator-scale.yaml drops
+# the traffic driver to 0 replicas (P1 doesn't drive load, and the
+# 512Mi cap on loadgenerator pushes us over budget).
+#
+# NB: we use `patchesStrategicMerge` (not the newer `patches:` list)
+# so the patch files can carry `#` header comments explaining each
+# block. The `patches:` form requires a pure JSON Merge Patch, which
+# would strip the documentation we want alongside each patch.
+patchesStrategicMerge:
+- patches/memory-patches.yaml
+- patches/loadgenerator-scale.yaml
+
+# Common label so we can find the whole stack with one selector
+# (`kubectl get all -n default -l app.kubernetes.io/part-of=boutique`).
+commonLabels:
+  app.kubernetes.io/part-of: boutique
+  app.kubernetes.io/managed-by: kustomize
+  app.kubernetes.io/version: v0.10.7
+
+# Namespace: default. The smoke test (Slice 5) will look for Boutique
+# pods in the `default` namespace per the upstream manifest; moving them
+# would force a ServiceMonitor + Grafana datasource update (Slice 3 work).
+namespace: default

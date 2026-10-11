@@ -28,7 +28,14 @@ TESTBED_KUBECONFIG   ?= $(CURDIR)/testbed/.kube/config
 KPS_CHART_VERSION    ?= 55.7.0
 LOKI_CHART_VERSION   ?= 6.21.0
 JAEGER_CHART_VERSION ?= 3.3.0
+CHAOS_MESH_CHART_VERSION ?= 2.7.2
 TESTBED_NS           ?= monitoring
+# Online Boutique is vendored from github.com/GoogleCloudPlatform/microservices-demo
+# tag v0.10.7 (see testbed/boutique/base/ORIGIN.txt).
+BOUTIQUE_VERSION     ?= v0.10.7
+# Chaos-mesh chart namespaces (separate from the SUT, per D2 + chaos guard rails).
+CHAOS_MESH_NS        ?= chaos-mesh
+CHAOS_TESTING_NS     ?= chaos-testing
 
 .DEFAULT_GOAL := help
 
@@ -168,6 +175,54 @@ obs: kind helm-check ## install observability stack (kube-prometheus-stack + Lok
 .PHONY: obs-status
 obs-status: ## show observability stack pods (--context kind-inframind)
 	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) get pods -n $(TESTBED_NS) -o wide
+
+# --- boutique (P1 slice 4) ---
+# Apply the vendored Online Boutique kustomize (D3-capped) into the
+# kind cluster. We pipe `kubectl kustomize` output into `kubectl apply`
+# (rather than `apply -k`) so the same command works in environments
+# where the sandbox/CLI wrapper blocks `apply -k` while still letting
+# `apply -f -` through. Uses kubectl's built-in kustomize (≥ 1.14),
+# no standalone `kustomize` binary required. Idempotent.
+.PHONY: boutique boutique-status boutique-delete
+boutique: kind ## install Online Boutique $(BOUTIQUE_VERSION) into the kind cluster (D3-capped)
+	@kubectl kustomize testbed/boutique \
+		| kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+			apply -f -
+
+boutique-status: ## show Boutique + Redis pods (--context kind-inframind)
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+		get pods -n default -l app.kubernetes.io/part-of=boutique -o wide
+
+boutique-delete: ## delete all Boutique + Redis resources (D5 reset; also handled by make down via cluster delete)
+	@kubectl kustomize testbed/boutique \
+		| kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+			delete -f - --ignore-not-found
+
+# --- chaos (P1 slice 4) ---
+# Install Chaos Mesh into the kind cluster and apply the 4 baseline
+# CRs (pod-kill, network-delay, cpu-stress, stress-memory). Targets
+# the Boutique pods in `default`. The CRs land in `chaos-testing`;
+# the operator + daemons live in `chaos-mesh`.
+.PHONY: chaos chaos-status chaos-delete
+chaos: kind helm-check ## install Chaos Mesh + apply 4 baseline chaos CRs
+	@CHAOS_MESH_CHART_VERSION=$(CHAOS_MESH_CHART_VERSION) \
+	 TESTBED_CONTEXT=$(TESTBED_CONTEXT) \
+	 TESTBED_KUBECONFIG=$(TESTBED_KUBECONFIG) \
+	 CHAOS_MESH_NS=$(CHAOS_MESH_NS) \
+	 CHAOS_TESTING_NS=$(CHAOS_TESTING_NS) \
+	 bash testbed/chaos/install.sh
+
+chaos-status: ## show chaos-mesh pods + the 4 chaos CRs
+	@echo "--- chaos-mesh operator + daemons ---"
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+		get pods -n $(CHAOS_MESH_NS) -o wide
+	@echo "--- chaos experiments ---"
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+		get podchaos,networkchaos,stresschaos -n $(CHAOS_TESTING_NS)
+
+chaos-delete: ## delete the 4 chaos CRs (but keep chaos-mesh installed)
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+		delete podchaos,networkchaos,stresschaos --all -n $(CHAOS_TESTING_NS) --ignore-not-found
 
 .PHONY: smoke-testbed
 smoke-testbed: ## verify the P1 → P2 gate (lands fully in slice 5 of P1)

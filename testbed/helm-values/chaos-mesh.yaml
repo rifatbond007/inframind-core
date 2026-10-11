@@ -1,0 +1,156 @@
+# testbed/helm-values/chaos-mesh.yaml
+#
+# Slim-default values for the Chaos Mesh Helm chart (2.7.2).
+#
+# D2 FIX (socket path): the kind node's containerd socket is exposed
+# at /var/run/docker.sock via `extraMounts` in testbed/kind/cluster.yaml.
+# chaos-daemon reads it with `chaosDaemon.runtime=docker` and
+# `chaosDaemon.socketPath=/var/run/docker.sock`. This is the documented
+# path for kind in 2026; the chart's `runtime=containerd` mode expects
+# the daemon to mount the in-node socket directly, which is harder to
+# plumb through kind's container-in-container model.
+#
+# Architecture:
+#   chaos-controller-manager  (Deployment, 1 replica) — validates CRs
+#   chaos-daemon              (DaemonSet, 1 per node) — applies faults
+#   chaos-dashboard           (Deployment, optional) — UI; disabled in slim
+#
+# Memory levers if Chaos Mesh OOMs:
+#   1. drop `controllerManager.resources.limits.memory` from 384Mi to 256Mi
+#   2. drop `chaosDaemon.resources.limits.memory` from 256Mi to 192Mi
+#   3. (long runs) raise the controller's `GOGC` env to 200
+#
+# References:
+#   - chart 2.7.2 values: https://github.com/chaos-mesh/chaos-mesh/blob/v2.7.2/helm/chaos-mesh/values.yaml
+#   - D2 (Chaos Mesh socket path): docs/decision-tree.md
+#   - testbed/kind/cluster.yaml (extraMounts plumbing)
+
+# --- Controller manager ---
+# Scope the controller to only the SUT namespace (`default`). The chart
+# default is `clusterScoped: true`, which makes the controller watch
+# every namespaced resource in the cluster. On a busy kind cluster
+# (monitoring + chaos-mesh + chaos-testing + default + kube-system)
+# the watch surface is large enough to exhaust fds before the cache
+# syncs, and the manager CrashLoops with "too many open files" before
+# any chaos experiment can be applied. `targetNamespace: default`
+# scopes the watch to one namespace — enough for Slice 4 acceptance,
+# easy to widen in `make testbed-full`.
+controllerManager:
+  replicaCount: 1
+  targetNamespace: default
+  resources:
+    limits:
+      cpu: 500m
+      memory: 384Mi
+    requests:
+      cpu: 100m
+      memory: 128Mi
+  # Only enable the 4 controllers we actually use. The chart default
+  # is `["*"]`, which boots ~20+ controllers (awschaos, azurechaos,
+  # gcpchaos, kernelchaos, jvmchaos, physicalmachinechaos, etc.) —
+  # each opens watches on the kube-apiserver, and the resulting fd
+  # pressure triggers a "too many open files" CrashLoop on kind.
+  # Slice 4 uses these 4; Slice 5/7 may re-enable others.
+  enabledControllers:
+    - podchaos
+    - networkchaos
+    - stresschaos
+    - workflows
+  # Only enable the webhooks the controllers need.
+  enabledWebhooks:
+    - podchaos
+    - networkchaos
+    - stresschaos
+    - workflows
+  # Enable all 4 fault types we use in P7 / Slice 4 chaos CRs.
+  # Disabling one drops the corresponding CRD from the apiserver.
+  selector:
+    enableFilterNamespace: true
+
+# --- Daemon ---
+# Runs on every node. Mounts /var/run/docker.sock (D2 plumbing from
+# cluster.yaml). Applies faults (pod-kill, network-delay, cpu-stress,
+# stress-memory) on Pods scheduled to its node.
+chaosDaemon:
+  # D2: docker runtime + the kind-injected socket path. The kind
+  # cluster.yaml bind-mounts /run/containerd/containerd.sock to
+  # /var/run/docker.sock inside the kind node container; chaos-daemon
+  # reads it as a "docker" socket.
+  runtime: docker
+  socketPath: /var/run/docker.sock
+  # The hostPath the chaos-daemon Pod mounts. Must match the
+  # containerPath in cluster.yaml.
+  mountPath: /var/run/docker.sock
+  # resource caps for the daemon
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  # chaos-daemon needs NET_ADMIN to inject tc qdisc delays. The chart
+  # grants this via hostNetwork on the DaemonSet when
+  # `chaosDaemon.hostNetwork` is true. We keep it on so networkchaos CRs
+  # work.
+  hostNetwork: true
+  # Don't auto-tag namespaces — only inject faults where the user
+  # explicitly opts in. The 4 CRs in testbed/chaos/ all target `default`.
+  enableFilterNamespace: true
+  # Don't run the chaos-daemon in privileged mode on the kind node —
+  # we get by with the docker-socket approach.
+  privileged: false
+  # The chart's default image runs as PID 1 in the DaemonSet Pod; no
+  # extra args needed for the docker-runtime path. The chart 2.7.2
+  # values schema expects an object {registry, repository, tag}, not
+  # a string — that's the shape we use.
+  image:
+    registry: ghcr.io
+    repository: chaos-mesh/chaos-daemon
+    tag: 2.7.2
+
+# --- Dashboard (disabled for slim default) ---
+# The dashboard is a 1-pod React app; it adds ~150 MiB and isn't on the
+# smoke-test path. Re-enable in the `make testbed-full` profile.
+dashboard:
+  enabled: false
+
+# --- DNS Chaos (we don't need it for P1/P7) ---
+dnsServer:
+  enabled: false
+
+# --- Webhook server (RBAC) ---
+# Required for chaos experiments that need ServiceAccount manipulation.
+webhook:
+  enabled: true
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+
+# --- Image pull policy ---
+imagePullPolicy: IfNotPresent
+
+# Cluster scope: scope to the SUT namespace only (see
+# controllerManager.targetNamespace above). With clusterScoped: true
+# the manager watches all namespaces; the resulting fd pressure
+# triggers a CrashLoop on kind. Set to false + targetNamespace to
+# `default` to keep the watch surface small.
+clusterScoped: false
+
+# --- Service account ---
+# The default SA `chaos-mesh` is created automatically with the
+# clusterrole/clusterrolebinding the chart ships. We add no overrides.
+serviceAccount:
+  create: true
+  name: chaos-mesh
+
+# --- Install CRDs? ---
+# The chart's `crds.install` defaults to true; we keep it. The 4 CRs
+# in testbed/chaos/ are typed as `PodChaos`, `NetworkChaos`, `StressChaos`
+# and would fail validation without the CRDs.
+crds:
+  install: true

@@ -1,0 +1,76 @@
+# testbed/boutique/patches/memory-patches.yaml
+#
+# D3 FIX: Online Boutique's 11 services must all be capped for the
+# 7 GiB-host slim default. The upstream v0.10.7 manifests already cap
+# every service — this patch tightens the three heaviest so the working
+# set stays under ~2.5 GiB.
+#
+# Why patch instead of editing base/:
+#   - base/ is vendored from upstream; we want `git diff` to stay empty
+#     so we can `git checkout v0.10.7` and re-apply this file unchanged.
+#
+# Slim-default budget (7 GiB host, ~1.5 GiB reserved for the kind control
+# plane + observability stack, leaving ~5 GiB for Boutique):
+#
+#   Service                     Upstream    This patch   Note
+#   --------------------------  ----------  -----------  ----------------
+#   loadgenerator               512Mi  500m   -- (0 replicas, see loadgenerator-scale.yaml)
+#   recommendationservice       450Mi  200m   384Mi  200m  Python ML service, heaviest; 384Mi holds it under traffic
+#   adservice                   300Mi  300m   256Mi  300m  Java JVM, cap lower if OOMs
+#   cartservice (Go)            128Mi  300m   128Mi  300m  (unchanged)
+#   cartservice (redis)         128Mi  125m   128Mi  125m  (unchanged)
+#   frontend (Go)               128Mi  200m   128Mi  200m  (unchanged)
+#   productcatalogservice (Go)  128Mi  200m   128Mi  200m  (unchanged)
+#   checkoutservice (Go)        128Mi  200m   128Mi  200m  (unchanged)
+#   currencyservice (Node)      128Mi  200m   128Mi  200m  (unchanged)
+#   emailservice (Python)       128Mi  200m   128Mi  200m  (unchanged)
+#   paymentservice (Node)       128Mi  200m   128Mi  200m  (unchanged)
+#   shippingservice (Go)        128Mi  200m   128Mi  200m  (unchanged)
+#
+# Working set after this patch: ~2.0 GiB on the 7 GiB host (1.5 GiB
+# reserved for kind + monitoring). Within budget. If a service OOMs:
+#   1. check `kubectl describe pod` for the OOMKilled event
+#   2. raise its limit here (and re-`make boutique`); for 8 GiB+ hosts
+#      you can restore the upstream values, or bump loadgenerator
+#      to 1 replica in loadgenerator-scale.yaml
+#   3. long-term: switch to the `make testbed-full` profile (2c2w,
+#      16 GiB+ hosts, documented in testbed/README.md §7)
+#
+# References:
+#   - D3 (Boutique memory caps for all 11 services): docs/decision-tree.md
+#   - upstream v0.10.7: github.com/GoogleCloudPlatform/microservices-demo/releases/tag/v0.10.7
+#   - testbed/README.md §6 (troubleshooting) for OOMKilled diagnosis
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: recommendationservice
+spec:
+  template:
+    spec:
+      containers:
+      - name: server
+        resources:
+          limits:
+            cpu: 200m
+            memory: 384Mi
+          requests:
+            cpu: 100m
+            memory: 256Mi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: adservice
+spec:
+  template:
+    spec:
+      containers:
+      - name: server
+        resources:
+          limits:
+            cpu: 300m
+            memory: 256Mi
+          requests:
+            cpu: 200m
+            memory: 180Mi
