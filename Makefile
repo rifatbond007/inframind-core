@@ -20,6 +20,16 @@ TESTBED_CONTEXT      ?= kind-inframind
 # standard, this never touches `~/.kube/config`.
 TESTBED_KUBECONFIG   ?= $(CURDIR)/testbed/.kube/config
 
+# --- testbed chart pins (slice 3 of P1) ---
+# Versions for the observability + SUT + chaos charts. `make obs` and
+# `make chaos` use these. Bump in lockstep with the values files in
+# `testbed/helm-values/` — a chart bump without a values-file audit
+# is a likely-breakage event.
+KPS_CHART_VERSION    ?= 55.7.0
+LOKI_CHART_VERSION   ?= 6.21.0
+JAEGER_CHART_VERSION ?= 3.3.0
+TESTBED_NS           ?= monitoring
+
 .DEFAULT_GOAL := help
 
 .PHONY: help
@@ -144,6 +154,20 @@ kind-status: ## show cluster nodes (--context kind-inframind, never the default 
 
 kind-delete: ## delete the kind-inframind cluster (used by make down and for clean resets)
 	@kind delete cluster --name $(TESTBED_CONTEXT) --kubeconfig $(TESTBED_KUBECONFIG)
+
+.PHONY: obs
+obs: kind helm-check ## install observability stack (kube-prometheus-stack + Loki + Jaeger) into the kind cluster
+	@KPS_CHART_VERSION=$(KPS_CHART_VERSION) \
+	 LOKI_CHART_VERSION=$(LOKI_CHART_VERSION) \
+	 JAEGER_CHART_VERSION=$(JAEGER_CHART_VERSION) \
+	 TESTBED_CONTEXT=$(TESTBED_CONTEXT) \
+	 TESTBED_KUBECONFIG=$(TESTBED_KUBECONFIG) \
+	 TESTBED_NS=$(TESTBED_NS) \
+	 bash testbed/obs/install.sh
+
+.PHONY: obs-status
+obs-status: ## show observability stack pods (--context kind-inframind)
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) get pods -n $(TESTBED_NS) -o wide
 
 .PHONY: smoke-testbed
 smoke-testbed: ## verify the P1 → P2 gate (lands fully in slice 5 of P1)

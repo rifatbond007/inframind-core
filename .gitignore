@@ -59,9 +59,13 @@ kind-*.kubeconfig
 # Testbed-specific (Slice 2 writes a kubeconfig under testbed/.kube/; never commit)
 testbed/.kube/
 testbed/.kind/
+testbed/.kind-bootstrap.log
 testbed/**/kubeconfig
 testbed/**/kubeconfig.*
 testbed/**/*.kubeconfig
+# Rendered chart outputs (slice 3+ — for `make obs` debug, not for commit)
+testbed/helm-values/rendered/
+testbed/helm-values/*.rendered.yaml
 # Helm/cluster temporary artifacts
 .helm/
 charts/*.tgz

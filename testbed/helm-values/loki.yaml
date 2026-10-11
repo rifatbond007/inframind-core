@@ -1,0 +1,178 @@
+# testbed/helm-values/loki.yaml
+#
+# Slim-default values for the loki-distro Helm chart (6.21.0).
+# Single-binary mode (one pod that does distributor + ingester +
+# querier + compactor internally) keeps the working set tiny.
+#
+# IMPORTANT — chart 6.21.0 validation rules (see templates/validate.yaml):
+#   - SimpleScalable and Distributed modes REQUIRE object storage
+#   - SingleBinary mode works with filesystem storage
+#   - In SingleBinary mode, none of the "distributed target"
+#     replicas (ingester, distributor, querier, etc.) can be > 0
+#     — those are set to 0 by default. Do not override them.
+#   - The `singleBinary.replicas` value controls the single-binary
+#     pod's replica count (we keep it at 1 for the slim default).
+#   - The chart's validate.yaml hard-fails if `lokiCanary.enabled`
+#     is false while `test.enabled` is true. We enable the canary
+#     (it's ~5 MiB) and disable the helm test pod.
+#
+# Why NodePort: same D4 reasoning as kube-prometheus-stack.yaml.
+# The NodePort 30100 here must match the host-side 30100 in
+# testbed/kind/cluster.yaml.
+#
+# Memory levers if Loki OOMs:
+#   1. drop `loki.resources.limits.memory` from 512Mi to 384Mi
+#   2. enable the compactor (`compactor.replicas: 1`) so the WAL
+#      is compacted to chunks — this is the lever for longer runs
+#   3. drop `singleBinary.persistence.size` from 2Gi to 1Gi
+#
+# References:
+#   - chart 6.21.0 values: https://github.com/grafana/loki/blob/production/helm/charts/loki-distro/values.yaml
+#   - chart validate.yaml: /tmp/loki-chart/loki/templates/validate.yaml
+#   - D4 (NodePort requirement): docs/decision-tree.md
+
+# --- Deployment mode ---
+# SingleBinary is the only mode that works with filesystem storage
+# on a 7 GiB host. The chart's `validate.yaml` enforces this
+# combination: SimpleScalable and Distributed modes REQUIRE object
+# storage, and the per-target replica counts must be 0 in
+# SingleBinary mode.
+deploymentMode: SingleBinary
+
+# --- Single-binary pod ---
+# `singleBinary.replicas` controls the single-binary pod's replica
+# count. Keep at 1 for the slim default; bump to 2 in the
+# `make testbed-full` profile.
+singleBinary:
+  replicas: 1
+  persistence:
+    enabled: true
+    size: 2Gi
+
+# --- Loki runtime config ---
+loki:
+  # Disable multi-tenancy auth. The chart 6.21.0 default is
+  # `auth_enabled: true`, which requires every API call to carry
+  # an `X-Scope-OrgID` header — `/ready` returns 404 without it.
+  # P1 is a single-tenant dev box; the smoke test curls `/ready`
+  # without a header. Set this back to `true` in any multi-tenant
+  # deployment.
+  auth_enabled: false
+
+  # Storage backend: filesystem (required by chart 6.21.0's
+  # SingleBinary mode; bucketNames must be present even when
+  # type=filesystem because the chart's _helpers.tpl reads them).
+  storage:
+    type: filesystem
+    bucketNames:
+      chunks: chunks
+      ruler: ruler
+      admin: admin
+    filesystem:
+      chunks_directory: /var/loki/chunks
+      rules_directory: /var/loki/rules
+      admin_api_directory: /var/loki/admin
+
+  # Storage schema: keep it simple for P1.
+  schemaConfig:
+    configs:
+      - from: 2024-01-01
+        store: tsdb
+        object_store: filesystem
+        schema: v13
+        index:
+          prefix: index_
+          period: 24h
+
+  # Per-process resource caps (applied to the single-binary pod).
+  resources:
+    limits:
+      cpu: 1
+      memory: 512Mi
+    requests:
+      cpu: 100m
+      memory: 256Mi
+
+  limits_config:
+    # Cap per-stream ingestion so a noisy service can't fill the disk.
+    ingestion_rate_mb: 8
+    ingestion_burst_size_mb: 16
+    reject_old_samples: true
+    reject_old_samples_max_age: 168h
+    retention_period: 168h  # 7d, hard cap regardless of compactor
+
+# --- Per-target replica counts ---
+# In SingleBinary mode, ALL of these MUST be 0. The chart's
+# validate.yaml rejects any of them > 0 (it interprets them as
+# "distributed" or "scalable" target deployment). The default for
+# `ingester/distributor/querier/...` is 0, but `backend/read/write`
+# default to 3 — we set them to 0 explicitly.
+backend:
+  replicas: 0
+read:
+  replicas: 0
+write:
+  replicas: 0
+# ingester/distributor/querier/queryFrontend/queryScheduler/indexGateway/
+# compactor/ruler all default to replicas: 0; do not override.
+
+# --- Gateway ---
+# The gateway is the ClusterIP service inside the cluster. Grafana's
+# datasource URL (`http://loki-gateway:80`) talks to it directly. We
+# also expose it on NodePort 30100 for `make smoke-testbed`'s
+# `curl http://localhost:30100/ready` check.
+gateway:
+  enabled: true
+  replicas: 1
+  resources:
+    limits:
+      cpu: 200m
+      memory: 128Mi
+    requests:
+      cpu: 50m
+      memory: 64Mi
+  service:
+    type: NodePort
+    nodePort: 30100
+    port: 80
+    targetPort: 80
+
+# --- Canary + helm test ---
+# The chart's validate.yaml hard-fails if `lokiCanary.enabled=false`
+# AND `test.enabled=true`. We re-enable the canary (push: false
+# means it writes to stdout — no agent needed) and disable the
+# helm-test pod (which would otherwise try to run a real query
+# against a not-yet-up Loki).
+lokiCanary:
+  enabled: true
+  push: false
+test:
+  enabled: false
+  image:
+    pullPolicy: IfNotPresent
+
+# --- Self-monitoring (datasources/agent) ---
+monitoring:
+  selfMonitoring:
+    enabled: false
+  dashboards:
+    enabled: false
+  rules:
+    enabled: false
+
+# --- Memcached caches ---
+# The chunks-cache and results-cache memcached pods each ask for
+# ~256 MiB on a 7 GiB host. They aren't on the smoke-test critical
+# path and they can fail to schedule (the chunks-cache Pod was
+# Pending with "Insufficient memory" on the slim default).
+# Disable both; the smoke test reads `/ready` on the gateway, which
+# doesn't depend on them.
+chunksCache:
+  enabled: false
+resultsCache:
+  enabled: false
+
+# --- Object store ---
+# SingleBinary uses filesystem; minio is not installed.
+minio:
+  enabled: false

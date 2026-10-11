@@ -79,7 +79,7 @@ the pod-kill chaos assertion from the P1 → P2 phase gate:
 | 1 | `docker compose ps` | redis + postgres Up |
 | 2 | `kubectl get pods -A` (all namespaces) | no Pods in `Pending`, `CrashLoopBackOff`, `ImagePullBackOff`, or `Error` |
 | 3 | Prometheus `/api/v1/status/runtimeinfo` | 200 OK |
-| 4 | Loki `/ready` | `ready` |
+| 4 | Loki `/loki/api/v1/status/buildinfo` (through gateway) | 200 with `version` field (the gateway's nginx doesn't proxy `/ready`; the pod's own readiness probe uses `/ready` directly and is passing — verified by `kubectl get pod loki-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'` = `True`) |
 | 5 | Jaeger UI `/` | HTML page loads |
 | 6 | Apply `testbed/chaos/pod-kill.yaml`, wait 30s | Prometheus records a `kube_pod_container_status_restarts_total` increment **and** Loki shows a `Killing` log line **and** Jaeger shows a `frontend` trace ending in error within the last 5 min |
 
@@ -111,6 +111,7 @@ fixes won't apply — the files don't exist yet.
 | [S4] `chaos-mesh` | `chaos-daemon` is `CrashLoopBackOff` | `chaosDaemon.runtime` is not set to `containerd`, **or** the kind node's containerd socket is not exposed to the chaos-daemon Pod (cluster.yaml needs `extraMounts` for `/run/containerd/containerd.sock`) | The values file in `testbed/helm-values/chaos-mesh.yaml` sets `runtime=containerd`. The `cluster.yaml` extraMounts is the second half — slice 4 documents the exact patch. |
 | [S3] `kube-prometheus-stack` | Prometheus pod is `OOMKilled` | The 768 MiB cap is too tight for your scrape volume | Drop to 512 MiB in `testbed/helm-values/kube-prometheus-stack.yaml` and reduce `retention` to 4h. The header comment in that file documents the levers. |
 | [S3] `loki` | Loki pod is `OOMKilled` | WAL growth because `compactor.replicas=0` | Acceptable for short P1 dev runs. For longer ones, enable the compactor in the values file. |
+| [S3] `loki` | `curl http://localhost:30100/ready` returns 404 | The chart's gateway nginx doesn't proxy `/ready` (it tries to serve it as a static file). Loki itself is ready — verify with `kubectl get pod -n monitoring loki-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'` (returns `True`) or `curl http://localhost:30100/loki/api/v1/status/buildinfo` (returns the version). The slice 5 smoke test uses the buildinfo path. |
 | (always) | `kubectl` complains about the wrong context | You ran a command without `--context kind-inframind` | Always pass `--context kind-inframind`, or `kubectl config use-context kind-inframind` once per session. This is the **most-violated rule** (standard 09 §9.5). |
 | [S4] `boutique` | Online Boutique pods `Pending` or `OOMKilled` | Insufficient cluster resources, or uncapped services hitting the 7 GiB ceiling | Drop the per-service limits in `testbed/boutique/memory-patches.yaml`. Slice 4 caps all 11 services. |
 | [S2] `cluster.yaml` | Port already in use (9090/3100/16686/9093/4317/4318) | A previous run, a sibling project, or a host service | Stop the other consumer, or change the host-side `extraPortMappings` in `testbed/kind/cluster.yaml`. 4317/4318 (OTLP) are added in slice 2. |
