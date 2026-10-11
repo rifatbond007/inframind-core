@@ -1,0 +1,113 @@
+# kind cluster for InfraMind P1 (testbed).
+#
+# Topology: 1 control-plane + 1 worker (slim default for ≤ 8 GiB hosts).
+# Pinned image: kindest/node:v1.30.0 — matches KUBECTL_VERSION.
+#
+# Design review (2026-10-11) — fixes baked in:
+#   D2: The kind node container's containerd socket is exposed so the
+#       chaos-daemon Pod (slice 4) can `hostPath`-mount it. Mechanism:
+#       each kind node container is started with an `extraMounts` entry
+#       that bind-mounts `/run/containerd/containerd.sock` (the in-node
+#       path) onto `/var/run/docker.sock` (a path the chaos-daemon
+#       already knows how to read with `chaosDaemon.runtime=docker`).
+#       This avoids the much-trickier `runtime=containerd` path that
+#       would need the daemon to mount the in-node socket directly. The
+#       slice 4 chaos-mesh values file uses
+#       `chaosDaemon.runtime=docker, chaosDaemon.socketPath=/var/run/docker.sock`.
+#   D4: extraPortMappings cover the full observability stack on
+#       NodePort-range ports (30000-32767) so the slice 3 chart values
+#       can set `service.type=NodePort` + `nodePort=<N>` and `make
+#       smoke-testbed` can curl `localhost:<N>`.
+#   D1: 4317/4318 (OTLP gRPC/HTTP) are forwarded for the Jaeger
+#       allInOne OTLP receiver (the Online Boutique OTel sidecar
+#       exports OTLP, not Jaeger thrift).
+#
+# All `kubectl`/`helm` calls against this cluster must use
+# `--context kind-inframind` per standard 09 §9.5.
+
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+# Cluster name is `inframind`. kind's convention prefixes the
+# context name with `kind-`, so the kubectl context becomes
+# `kind-inframind` (canonical) and the Docker containers become
+# `kind-inframind-control-plane` / `kind-inframind-worker`.
+# (Verified empirically — naming the cluster `kind-inframind` would
+# produce context `kind-kind-inframind`, which is wrong.)
+name: inframind
+nodes:
+  # --- control-plane ---
+  - role: control-plane
+    image: kindest/node:v1.30.0
+    # D2 plumbing: bind-mount the in-node containerd socket onto a path
+    # chaos-daemon can read as "the docker socket". The kind node
+    # container is itself a container, so this mount configures the
+    # docker run that kind performs to launch the control-plane.
+    extraMounts:
+      - hostPath: /run/containerd/containerd.sock
+        containerPath: /var/run/docker.sock
+        # readOnly is the right default; chaos-daemon mounts rw when
+        # it needs to inject faults.
+        readOnly: false
+        # selinuxRelabel defaults to false; kind's runtime is fine
+        # without it on this dev box.
+        selinuxRelabel: false
+        propagation: None
+    # D4: observability port maps. The slice 3 chart values will set
+    # `service.type=NodePort` + `service.nodePort=<N>` to these values.
+    extraPortMappings:
+      - containerPort: 30090  # Prometheus
+        hostPort: 30090
+        protocol: TCP
+      - containerPort: 30300  # Grafana
+        hostPort: 30300
+        protocol: TCP
+      - containerPort: 30093  # Alertmanager
+        hostPort: 30093
+        protocol: TCP
+      - containerPort: 30100  # Loki (distributor/gateway)
+        hostPort: 30100
+        protocol: TCP
+      - containerPort: 30686  # Jaeger query UI
+        hostPort: 30686
+        protocol: TCP
+      - containerPort: 30317  # Jaeger OTLP gRPC (D1)
+        hostPort: 30317
+        protocol: TCP
+      - containerPort: 30318  # Jaeger OTLP HTTP (D1)
+        hostPort: 30318
+        protocol: TCP
+
+  # --- worker ---
+  - role: worker
+    image: kindest/node:v1.30.0
+    # Same D2 plumbing on the worker so Online Boutique pods and the
+    # chaos-daemon (if it lands on the worker) see the same socket path.
+    extraMounts:
+      - hostPath: /run/containerd/containerd.sock
+        containerPath: /var/run/docker.sock
+        readOnly: false
+        selinuxRelabel: false
+        propagation: None
+    # NB: NO extraPortMappings on the worker. kind duplicates each
+    # extraPortMapping on the host per node, so putting the same set
+    # on the worker would collide with the control-plane's binds
+    # ("Bind for 0.0.0.0:30090 failed: port is already allocated").
+    # NodePort service traffic reaches the worker through the
+    # control-plane's host publish (iptables/IPVS in kube-proxy) — we
+    # don't need direct host-to-worker port forwarding for the
+    # observability stack or the Online Boutique UI.
+
+# Default kubelet flags. We do NOT tune maxPods (default 110 is fine
+# for the slim default) or eviction thresholds (let kind use its
+# defaults — the observability stack in slice 3 has its own memory
+# caps in the chart values).
+kubeadmConfigPatches:
+  - |
+    kind: ClusterConfiguration
+    apiVersion: kubeadm.k8s.io/v1beta3
+    networking:
+      # The pod CIDR is fine at default; explicitly pinning avoids
+      # surprises when other kind clusters on the same host use a
+      # different range.
+      podSubnet: "10.244.0.0/16"
+      serviceSubnet: "10.96.0.0/16"

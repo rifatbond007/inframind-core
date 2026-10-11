@@ -134,6 +134,17 @@ helm-check: ## verify helm $(HELM_VERSION) is on PATH
 # Slice 1 lands the stub for `smoke-testbed`; the full implementation comes
 # in slice 5 alongside the `make up` chain. Slices 2-4 land `make kind`,
 # `make obs`, `make boutique`, `make chaos` in turn.
+
+.PHONY: kind kind-status kind-delete
+kind: kind-check ## create the kind-inframind cluster (idempotent; 1c1w slim default)
+	@bash testbed/kind/bootstrap.sh
+
+kind-status: ## show cluster nodes (--context kind-inframind, never the default context)
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) get nodes -o wide
+
+kind-delete: ## delete the kind-inframind cluster (used by make down and for clean resets)
+	@kind delete cluster --name $(TESTBED_CONTEXT) --kubeconfig $(TESTBED_KUBECONFIG)
+
 .PHONY: smoke-testbed
 smoke-testbed: ## verify the P1 → P2 gate (lands fully in slice 5 of P1)
 	@echo "smoke-testbed is not yet implemented."
