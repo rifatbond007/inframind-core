@@ -40,16 +40,7 @@ if ! command -v kind >/dev/null 2>&1; then
 fi
 log_ok "kind $(kind version | awk '{print $2}')"
 
-# --- pre-flight 2: free RAM ---
-AVAIL_MIB="$(free -m | awk '/Mem:/{print $7}')"
-if [ "${AVAIL_MIB:-0}" -lt "$FREE_MIN_MIB" ]; then
-  log_fail "free memory is ${AVAIL_MIB} MiB; minimum is $FREE_MIN_MIB MiB."
-  log_warn "  Try: docker system prune -af   (frees ~1-2 GiB)"
-  exit 1
-fi
-log_ok "${AVAIL_MIB} MiB available (>= $FREE_MIN_MIB)"
-
-# --- pre-flight 3: docker reachable ---
+# --- pre-flight 2: docker reachable (cheap, do before memory) ---
 if ! docker info >/dev/null 2>&1; then
   log_fail "docker not reachable. Start Docker and retry."
   exit 1
@@ -57,11 +48,24 @@ fi
 log_ok "docker reachable"
 
 # --- idempotency: skip if cluster already exists ---
+# If the cluster is up, no new memory needs to be allocated; skip the
+# RAM check so a re-run of `make up` after `make obs` (which fills the
+# host with chart images) doesn't fail with a misleading "free memory"
+# error. The RAM check only gates the *create* path below.
 if kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
   log_ok "cluster '$CLUSTER_NAME' already exists; skip create"
   log_info "next: make kind-status"
   exit 0
 fi
+
+# --- pre-flight 3: free RAM (only for the create path) ---
+AVAIL_MIB="$(free -m | awk '/Mem:/{print $7}')"
+if [ "${AVAIL_MIB:-0}" -lt "$FREE_MIN_MIB" ]; then
+  log_fail "free memory is ${AVAIL_MIB} MiB; minimum is $FREE_MIN_MIB MiB."
+  log_warn "  Try: docker system prune -af   (frees ~1-2 GiB)"
+  exit 1
+fi
+log_ok "${AVAIL_MIB} MiB available (>= $FREE_MIN_MIB)"
 
 # --- create ---
 mkdir -p "$(dirname "$KUBECONFIG_PATH")"

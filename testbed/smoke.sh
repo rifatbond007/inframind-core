@@ -252,8 +252,8 @@ check_pod_kill() {
   done
   if ! awk -v a="$t1" -v b="$t0" 'BEGIN{exit !(a+0 > b+0)}'; then
     log_fail "C6 prom: restart counter did not increase after ${POD_KILL_WAIT_SECONDS}s (t0=$t0, t1=$t1)"
-    log_warn "  the pod-kill CR scheduler is '@every 1m' — first fire is at t=0 on apply"
-    log_warn "  if just installed: wait 60s and re-run make smoke-testbed"
+    log_warn "  the pod-kill CR fires once on apply (chaos-mesh 2.7.x removed the per-CR scheduler field)"
+    log_warn "  if just installed: re-apply the CR (make chaos) then re-run make smoke-testbed"
     log_warn "  if persistent:    check chaos-daemon logs (kubectl logs -n chaos-mesh -l app.kubernetes.io/name=chaos-daemon)"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return

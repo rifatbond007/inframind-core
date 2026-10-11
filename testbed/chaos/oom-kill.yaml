@@ -1,7 +1,7 @@
 # testbed/chaos/oom-kill.yaml
 #
-# PodChaos: kill the frontend `server` container every 2 minutes for a
-# 5-minute window. Distinct from stress-memory (which holds memory
+# PodChaos: kill the frontend `server` container once on apply, bounded
+# to a 5-minute window. Distinct from stress-memory (which holds memory
 # until the kernel OOM-killer fires) — this is a deterministic
 # container-kill that mimics a memory-pressure / cgroup-OOM event the
 # kernel can't distinguish from a real one. The frontend pod will be
@@ -20,11 +20,11 @@
 # would make "first container" land on the sidecar, and the CR would
 # silently kill the wrong process. Pin the name.
 #
-# Schedule note: this CR and pod-kill.yaml both target app=frontend in
-# `default` and may co-fire on overlapping minutes. The C6 smoke-test
-# signal is "restart counter went up" — it does not attribute cause
-# between the two CRs. P7 evaluation runs that need per-CR attribution
-# will gate one or the other off (see docs/PROGRESS.md).
+# Why no `scheduler.cron`: chaos-mesh 2.7.x dropped the `scheduler`
+# field on PodChaos/StressChaos/NetworkChaos — it moved to a separate
+# `Workflow` resource. For the smoke test we don't need scheduling;
+# `duration: "5m"` makes the CR fire once on apply. P7 evaluation
+# will wrap this in a Workflow to repeat.
 #
 # Used by:
 #   - P7 evaluation (oom-kill scenario)
@@ -56,5 +56,3 @@ spec:
     containerNames:
       - server
   duration: "5m"
-  scheduler:
-    cron: "@every 2m"

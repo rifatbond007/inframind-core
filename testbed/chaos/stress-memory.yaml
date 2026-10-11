@@ -55,5 +55,3 @@ spec:
       # (see the comment header).
       oomScoreAdj: 1000
   duration: "5m"
-  scheduler:
-    cron: "@every 20m"

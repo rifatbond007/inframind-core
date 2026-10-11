@@ -46,6 +46,24 @@
 # any chaos experiment can be applied. `targetNamespace: default`
 # scopes the watch to one namespace — enough for Slice 4 acceptance,
 # easy to widen in `make testbed-full`.
+#
+# NB on the "too many open files" risk: we considered setting
+# `securityContext.sysctls: [{name: fs.nr-open, value: "65536"}]`
+# here, but kind's pod security admission (which enforces the
+# "baseline" policy by default in modern kind versions) rejects
+# `fs.nr-open` as an "unsafe" sysctl with `SysctlForbidden`. The
+# workaround — adding the kube-system label
+# `pod-security.kubernetes.io/enforce=privileged` to the
+# chaos-testing namespace — is worse than the problem, because it
+# would also disable the namespace-level restrictions we want for
+# the SUT. Instead, the slim default: scope to one namespace
+# (above), enable only the 4 controllers we use (below), enable
+# only the 4 webhooks they need (below), and start the controller
+# with the chart's default fd limit. The combination has been
+# verified to bring up clean on a 7 GiB host. If a future chart
+# upgrade re-introduces the fd pressure, raise the controller's
+# `GOGC` env to 200 (long-running soak) or limit the watch
+# surface further via `targetNamespace`.
 controllerManager:
   replicaCount: 1
   targetNamespace: default
@@ -65,22 +83,27 @@ controllerManager:
     requests:
       cpu: 100m
       memory: 128Mi
-  # Only enable the 3 controllers we actually use. The chart default
+  # Only enable the 4 controllers we actually use. The chart default
   # is `["*"]`, which boots ~20+ controllers (awschaos, azurechaos,
   # gcpchaos, kernelchaos, jvmchaos, physicalmachinechaos, etc.) —
   # each opens watches on the kube-apiserver, and the resulting fd
   # pressure triggers a "too many open files" CrashLoop on kind.
-  # Slice 4/5 use these 3. `workflows` is excluded because we don't
-  # ship a Workflow CR; add it back when P7 ships a multi-step scenario.
+  # Slice 4/5 use the 3 individual fault controllers; `workflows`
+  # is needed by P7 (chaos-mesh 2.7.x moved the per-CR `scheduler`
+  # field out of PodChaos/StressChaos/NetworkChaos and into a
+  # separate Workflow resource, so repeating-fault eval runs will
+  # need this controller).
   enabledControllers:
     - podchaos
     - networkchaos
     - stresschaos
+    - workflows
   # Only enable the webhooks the controllers need.
   enabledWebhooks:
     - podchaos
     - networkchaos
     - stresschaos
+    - workflows
 
 # --- Daemon ---
 # Runs on every node. Mounts /var/run/docker.sock (D2 plumbing from
@@ -114,10 +137,16 @@ chaosDaemon:
   # extra args needed for the docker-runtime path. The chart 2.7.2
   # values schema expects an object {registry, repository, tag}, not
   # a string — that's the shape we use.
+  #
+  # The tag MUST be `v2.7.2` (with the `v` prefix) — the chart's
+  # default is `v2.7.2` and chaos-mesh's published images all carry
+  # the `v` prefix in their tags. A tag of `2.7.2` resolves to an
+  # image that doesn't exist in ghcr.io and produces
+  # `ImagePullBackOff` on the chaos-daemon Pod.
   image:
     registry: ghcr.io
     repository: chaos-mesh/chaos-daemon
-    tag: 2.7.2
+    tag: v2.7.2
 
 # --- Dashboard (disabled for slim default) ---
 # The dashboard is a 1-pod React app; it adds ~150 MiB and isn't on the

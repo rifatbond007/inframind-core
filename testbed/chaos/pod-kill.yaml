@@ -1,17 +1,18 @@
 # testbed/chaos/pod-kill.yaml
 #
-# PodChaos: kill the `frontend` pod once per minute, bounded to a 5-min
+# PodChaos: kill the `frontend` pod once on apply, bounded to a 5-min
 # window. This is the P1 → P2 gate check #6 — Prometheus records a
 # `kube_pod_container_status_restarts_total` increment, Loki shows
 # a `Killing` log line, and (if OTel is wired) Jaeger shows a
 # `frontend` trace ending in error.
 #
-# Schedule offset: cron "@every 1m" fires on the minute boundary (t=0,
-# t=60s, t=120s, ...). oom-kill.yaml is anchored to "1/2 * * * *" (t=60s,
-# t=180s, ...) so the two CRs never land on the same second. This makes
-# the C6 restart-counter signal attributable: a PodChaos (new UID) vs a
-# PodChaos container-kill (same UID, restart count increment only) are
-# distinguishable in the timing.
+# Why no `scheduler.cron`: chaos-mesh 2.7.x dropped the `scheduler`
+# field on individual CRs (PodChaos/StressChaos/NetworkChaos). The
+# CRD now has `duration:` only; scheduling moved to a separate
+# `Workflow` resource (the `workflows` controller). For the smoke
+# test we don't need scheduling — `duration: "5m"` makes the CR
+# fire once on apply and clean up after 5 minutes. P7 evaluation
+# will use a Workflow to repeat on a cron schedule.
 #
 # Apply with:
 #   kubectl --context kind-inframind apply -f testbed/chaos/pod-kill.yaml
@@ -40,9 +41,4 @@ spec:
       - default
     labelSelectors:
       app: frontend
-  # Bounded to a 5-min experiment window. Without `duration`, the CR
-  # lives forever and the scheduler fires every minute indefinitely,
-  # which is fine for an eval run but bad for a long-lived cluster.
   duration: "5m"
-  scheduler:
-    cron: "@every 1m"

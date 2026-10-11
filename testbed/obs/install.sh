@@ -93,6 +93,46 @@ helm_repo_add_if_missing incubator            https://charts.helm.sh/incubator
 helm_repo_add_if_missing bitnami              https://charts.bitnami.com/bitnami
 helm repo update >/dev/null
 
+# --- install: kube-prometheus-stack CRDs (subchart) ---
+# Chart 48+ split the prometheus-operator CRDs out of the main chart
+# into a separate subchart (charts/crds in the helm package). The
+# main chart's `crds.enabled: true` flag is a leftover from chart
+# 47.x and no longer auto-installs the CRDs — you have to install
+# the subchart as its own release BEFORE the main chart or the
+# operator will fail with `no matches for kind "Prometheus" in
+# version "monitoring.coreos.com/v1"`.
+#
+# Mechanism: the subchart at $CHART_DIR/charts/crds/ ships the 10
+# CRD YAMLs (one per kind — Alertmanager, AlertmanagerConfig,
+# PodMonitor, Probe, Prometheus, PrometheusAgent, PrometheusRule,
+# ScrapeConfig, ServiceMonitor, ThanosRuler) under its own crds/
+# directory. Helm 3 auto-loads files under a chart's `crds/` dir
+# as `kind: CustomResourceDefinition` resources; we install the
+# subchart as its own release so its CRDs are managed independently
+# of the main chart (so `helm uninstall kube-prometheus-stack`
+# won't drop the CRDs, and CRD upgrades can be done in isolation).
+# Ref: https://github.com/prometheus-community/helm-charts/blob/main/charts/kube-prometheus-stack/UPGRADE.md
+KPS_CRDS_RELEASE="${KPS_CRDS_RELEASE:-kube-prometheus-stack-crds}"
+log_info "installing kube-prometheus-stack CRDs (subchart, release=$KPS_CRDS_RELEASE)"
+KPS_CHART_CACHE_DIR="$REPO_ROOT/.cache/kube-prometheus-stack-charts"
+KPS_CHART_DIR="$KPS_CHART_CACHE_DIR/kube-prometheus-stack"
+if [ ! -d "$KPS_CHART_DIR/charts/crds" ]; then
+  log_info "  pulling chart kube-prometheus-stack@$KPS_CHART_VERSION to $KPS_CHART_DIR"
+  mkdir -p "$KPS_CHART_CACHE_DIR"
+  # `helm pull --untar` extracts the chart into a directory named after
+  # the chart (here: kube-prometheus-stack/) inside --untardir. So the
+  # crds subchart ends up at $KPS_CHART_DIR/charts/crds/.
+  helm pull prometheus-community/kube-prometheus-stack \
+    --version "$KPS_CHART_VERSION" --untar --untardir "$KPS_CHART_CACHE_DIR" >/dev/null
+fi
+# shellcheck disable=SC2086
+helm upgrade --install "$KPS_CRDS_RELEASE" "$KPS_CHART_DIR/charts/crds" \
+  --kube-context "$CONTEXT_NAME" \
+  --kubeconfig "$KUBECONFIG_PATH" \
+  --namespace "$MONITORING_NAMESPACE" \
+  --wait --timeout "$WAIT_TIMEOUT"
+log_ok "kube-prometheus-stack CRDs ready"
+
 # --- install: kube-prometheus-stack ---
 log_info "installing kube-prometheus-stack chart $KPS_CHART_VERSION"
 helm upgrade --install "$KPS_RELEASE" \

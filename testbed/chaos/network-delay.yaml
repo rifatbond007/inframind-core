@@ -44,11 +44,16 @@ spec:
     correlation: "75"
   direction: to
   target:
+    # NetworkChaos.spec.target.mode is REQUIRED in chart 2.7.2 (enum:
+    # one / all / fixed / fixed-percent / random-max-percent). Without
+    # it the CR fails CRD validation with
+    # `spec.target.mode: Unsupported value: ""`. `one` picks a single
+    # target pod to inject the tc qdisc into; for "all instances of
+    # the destination service", use `mode: all` instead.
+    mode: one
     selector:
       namespaces:
         - default
       labelSelectors:
         app: productcatalogservice
   duration: "5m"
-  scheduler:
-    cron: "@every 10m"
