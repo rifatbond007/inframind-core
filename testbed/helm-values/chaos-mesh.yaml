@@ -10,6 +10,17 @@
 # the daemon to mount the in-node socket directly, which is harder to
 # plumb through kind's container-in-container model.
 #
+# How the chart actually mounts the socket (verified by `helm template`
+# against chart 2.7.2):
+#   - the daemon's --runtime-socket-path arg is set to
+#     `/host-run/<basename of socketPath>` (here: /host-run/docker.sock)
+#   - the daemon's hostPath volume is the *parent directory* of
+#     socketPath (here: /var/run), mounted at /host-run in the Pod
+#   - so the file the daemon reads is /host-run/docker.sock in the Pod,
+#     which is the host's /var/run/docker.sock
+# `chaosDaemon.mountPath` is NOT a real chart key (verified: ignored
+# by 2.7.2's _helpers.tpl). Do not add it back.
+#
 # Architecture:
 #   chaos-controller-manager  (Deployment, 1 replica) — validates CRs
 #   chaos-daemon              (DaemonSet, 1 per node) — applies faults
@@ -38,6 +49,15 @@
 controllerManager:
   replicaCount: 1
   targetNamespace: default
+  # enableFilterNamespace at the top of controllerManager (NOT under
+  # .selector — that location is silently ignored by chart 2.7.2).
+  # When true, the controller only injects into namespaces carrying the
+  # annotation `chaos-mesh.org/inject=enabled`. We leave it at the
+  # chart default (false) for the slim default: the cluster is
+  # single-tenant and the SUT lives in `default`, so the annotation
+  # opt-in is unnecessary friction. Switch to `true` on a multi-tenant
+  # cluster or in the `make testbed-full` profile.
+  enableFilterNamespace: false
   resources:
     limits:
       cpu: 500m
@@ -45,42 +65,35 @@ controllerManager:
     requests:
       cpu: 100m
       memory: 128Mi
-  # Only enable the 4 controllers we actually use. The chart default
+  # Only enable the 3 controllers we actually use. The chart default
   # is `["*"]`, which boots ~20+ controllers (awschaos, azurechaos,
   # gcpchaos, kernelchaos, jvmchaos, physicalmachinechaos, etc.) —
   # each opens watches on the kube-apiserver, and the resulting fd
   # pressure triggers a "too many open files" CrashLoop on kind.
-  # Slice 4 uses these 4; Slice 5/7 may re-enable others.
+  # Slice 4/5 use these 3. `workflows` is excluded because we don't
+  # ship a Workflow CR; add it back when P7 ships a multi-step scenario.
   enabledControllers:
     - podchaos
     - networkchaos
     - stresschaos
-    - workflows
   # Only enable the webhooks the controllers need.
   enabledWebhooks:
     - podchaos
     - networkchaos
     - stresschaos
-    - workflows
-  # Enable all 4 fault types we use in P7 / Slice 4 chaos CRs.
-  # Disabling one drops the corresponding CRD from the apiserver.
-  selector:
-    enableFilterNamespace: true
 
 # --- Daemon ---
 # Runs on every node. Mounts /var/run/docker.sock (D2 plumbing from
 # cluster.yaml). Applies faults (pod-kill, network-delay, cpu-stress,
-# stress-memory) on Pods scheduled to its node.
+# stress-memory, oom-kill) on Pods scheduled to its node.
 chaosDaemon:
   # D2: docker runtime + the kind-injected socket path. The kind
   # cluster.yaml bind-mounts /run/containerd/containerd.sock to
   # /var/run/docker.sock inside the kind node container; chaos-daemon
-  # reads it as a "docker" socket.
+  # reads it as a "docker" socket. The chart turns this into a hostPath
+  # volume at /var/run mounted at /host-run in the Pod (see file header).
   runtime: docker
   socketPath: /var/run/docker.sock
-  # The hostPath the chaos-daemon Pod mounts. Must match the
-  # containerPath in cluster.yaml.
-  mountPath: /var/run/docker.sock
   # resource caps for the daemon
   resources:
     limits:
@@ -94,9 +107,6 @@ chaosDaemon:
   # `chaosDaemon.hostNetwork` is true. We keep it on so networkchaos CRs
   # work.
   hostNetwork: true
-  # Don't auto-tag namespaces — only inject faults where the user
-  # explicitly opts in. The 4 CRs in testbed/chaos/ all target `default`.
-  enableFilterNamespace: true
   # Don't run the chaos-daemon in privileged mode on the kind node —
   # we get by with the docker-socket approach.
   privileged: false
@@ -149,7 +159,7 @@ serviceAccount:
   name: chaos-mesh
 
 # --- Install CRDs? ---
-# The chart's `crds.install` defaults to true; we keep it. The 4 CRs
+# The chart's `crds.install` defaults to true; we keep it. The 5 CRs
 # in testbed/chaos/ are typed as `PodChaos`, `NetworkChaos`, `StressChaos`
 # and would fail validation without the CRDs.
 crds:

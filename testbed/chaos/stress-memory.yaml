@@ -18,9 +18,21 @@
 # pod will restart; the upstream cartservice has a 5s initialDelay on
 # the readiness probe, so the smoke-test assertion runs within 30s.
 #
+# Why `oomScoreAdj: 1000` (not 0): the kernel OOM-killer picks the
+# highest `oom_score` when memory runs out. With the default 0, the
+# kernel may pick a different process inside the stress container
+# (or even chaos-daemon's sidecar) before the stress allocator —
+# producing a "process disappeared" event instead of the clean
+# "cartservice OOMKilled" the runbook expects. Setting 1000 biases
+# the kernel to kill the stress allocator first, which then frees
+# memory and prevents the OOM from cascading. This is a known
+# gotcha with stress-ng inside cgroups; see issue chaos-mesh #3104.
+#
 # References:
 #   - chart 2.7.2 docs: https://chaos-mesh.org/docs/simulate-memory-stress-on-kubernetes/
 #   - testbed/README.md §6 (troubleshooting OOMKilled)
+#   - testbed/chaos/oom-kill.yaml (the deterministic counterpart;
+#     uses PodChaos container-kill instead of kernel OOM)
 
 apiVersion: chaos-mesh.org/v1alpha1
 kind: StressChaos
@@ -39,7 +51,9 @@ spec:
       workers: 1
       size: "200Mi"
       time: "5m"
-      oomScoreAdj: 0
+      # Bias kernel OOM-killer toward the stress-allocator process
+      # (see the comment header).
+      oomScoreAdj: 1000
   duration: "5m"
   scheduler:
     cron: "@every 20m"

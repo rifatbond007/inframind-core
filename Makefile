@@ -96,7 +96,13 @@ up: kind obs boutique chaos ## bring up Compose + the full testbed chain
 down: ## stop Compose + delete the kind cluster (full reset, incl. volumes)
 	$(COMPOSE) down -v
 	@if command -v kind >/dev/null 2>&1; then \
-		if [ -f "$(TESTBED_KUBECONFIG)" ] || kind get clusters 2>/dev/null | grep -q "^$(TESTBED_CLUSTER_NAME)$$"; then \
+		# Check both the testbed kubeconfig file and the host's kind
+		# cluster list (kind reads its own state from $$HOME/.kube/kind/*,
+		# not from the testbed kubeconfig). Pass --kubeconfig to the
+		# `kind get clusters` check so it doesn't read from $$KUBECONFIG
+		# (which may be set to a removed cluster from a prior session).
+		if [ -f "$(TESTBED_KUBECONFIG)" ] \
+		    || kind get clusters --kubeconfig $(TESTBED_KUBECONFIG) 2>/dev/null | grep -q "^$(TESTBED_CLUSTER_NAME)$$"; then \
 			echo "Deleting kind cluster '$(TESTBED_CLUSTER_NAME)' (context: $(TESTBED_CONTEXT))..."; \
 			kind delete cluster --name $(TESTBED_CLUSTER_NAME) --kubeconfig $(TESTBED_KUBECONFIG) || true; \
 		fi; \
@@ -180,6 +186,7 @@ obs: kind helm-check ## install observability stack (kube-prometheus-stack + Lok
 	@KPS_CHART_VERSION=$(KPS_CHART_VERSION) \
 	 LOKI_CHART_VERSION=$(LOKI_CHART_VERSION) \
 	 JAEGER_CHART_VERSION=$(JAEGER_CHART_VERSION) \
+	 TESTBED_CLUSTER_NAME=$(TESTBED_CLUSTER_NAME) \
 	 TESTBED_CONTEXT=$(TESTBED_CONTEXT) \
 	 TESTBED_KUBECONFIG=$(TESTBED_KUBECONFIG) \
 	 TESTBED_NS=$(TESTBED_NS) \
@@ -212,20 +219,21 @@ boutique-delete: ## delete all Boutique + Redis resources (D5 reset; also handle
 			delete -f - --ignore-not-found
 
 # --- chaos (P1 slice 4) ---
-# Install Chaos Mesh into the kind cluster and apply the 4 baseline
-# CRs (pod-kill, network-delay, cpu-stress, stress-memory). Targets
-# the Boutique pods in `default`. The CRs land in `chaos-testing`;
-# the operator + daemons live in `chaos-mesh`.
+# Install Chaos Mesh into the kind cluster and apply the 5 baseline
+# CRs (pod-kill, network-delay, cpu-stress, stress-memory, oom-kill).
+# Targets the Boutique pods in `default`. The CRs land in
+# `chaos-testing`; the operator + daemons live in `chaos-mesh`.
 .PHONY: chaos chaos-status chaos-delete
-chaos: kind helm-check ## install Chaos Mesh + apply 4 baseline chaos CRs
+chaos: kind helm-check ## install Chaos Mesh + apply 5 baseline chaos CRs
 	@CHAOS_MESH_CHART_VERSION=$(CHAOS_MESH_CHART_VERSION) \
+	 TESTBED_CLUSTER_NAME=$(TESTBED_CLUSTER_NAME) \
 	 TESTBED_CONTEXT=$(TESTBED_CONTEXT) \
 	 TESTBED_KUBECONFIG=$(TESTBED_KUBECONFIG) \
 	 CHAOS_MESH_NS=$(CHAOS_MESH_NS) \
 	 CHAOS_TESTING_NS=$(CHAOS_TESTING_NS) \
 	 bash testbed/chaos/install.sh
 
-chaos-status: ## show chaos-mesh pods + the 4 chaos CRs
+chaos-status: ## show chaos-mesh pods + the 5 chaos CRs
 	@echo "--- chaos-mesh operator + daemons ---"
 	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
 		get pods -n $(CHAOS_MESH_NS) -o wide
@@ -233,7 +241,7 @@ chaos-status: ## show chaos-mesh pods + the 4 chaos CRs
 	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
 		get podchaos,networkchaos,stresschaos -n $(CHAOS_TESTING_NS)
 
-chaos-delete: ## delete the 4 chaos CRs (but keep chaos-mesh installed)
+chaos-delete: ## delete the 5 chaos CRs (but keep chaos-mesh installed)
 	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
 		delete podchaos,networkchaos,stresschaos --all -n $(CHAOS_TESTING_NS) --ignore-not-found
 

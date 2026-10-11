@@ -15,6 +15,12 @@ source "$SCRIPTS_LIB"
 INFRAMIND_SCRIPT_NAME="obs-install"
 
 # --- knobs (env-overridable for tests) ---
+# CLUSTER_NAME is the *kind cluster name* (what `kind create/delete cluster
+# --name` accepts). CONTEXT_NAME is the kubectl context (kind adds the
+# `kind-` prefix automatically). They differ: cluster=inframind,
+# context=kind-inframind. The Makefile threads TESTBED_CLUSTER_NAME +
+# TESTBED_CONTEXT; this script defaults to the standard names if unset.
+CLUSTER_NAME="${TESTBED_CLUSTER_NAME:-inframind}"
 CONTEXT_NAME="${TESTBED_CONTEXT:-kind-inframind}"
 KUBECONFIG_PATH="${TESTBED_KUBECONFIG:-$REPO_ROOT/testbed/.kube/config}"
 KPS_CHART_VERSION="${KPS_CHART_VERSION:-55.7.0}"
@@ -48,11 +54,11 @@ fi
 log_ok "helm $(helm version --short)"
 
 # --- pre-flight: cluster reachable ---
-if ! kind get clusters 2>/dev/null | grep -qx "inframind"; then
-  log_fail "kind cluster 'inframind' not found. Run: make kind"
+if ! kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
+  log_fail "kind cluster '$CLUSTER_NAME' not found. Run: make kind"
   exit 1
 fi
-log_ok "kind cluster 'inframind' is up"
+log_ok "kind cluster '$CLUSTER_NAME' is up"
 
 # --- idempotency: create the namespace once ---
 log_info "ensuring namespace '$MONITORING_NAMESPACE' exists"

@@ -1,18 +1,30 @@
 # testbed/chaos/oom-kill.yaml
 #
-# PodChaos: kill the frontend container every 2 minutes for a 5-minute
-# window. Distinct from stress-memory (which holds memory until the
-# kernel OOM-killer fires) — this is a deterministic container-kill
-# that mimics a memory-pressure / cgroup-OOM event the kernel can't
-# distinguish from a real one. The frontend pod will be re-created by
-# the Deployment; the restart counter + Loki `Killing` log line
-# surface in Prom/Loki the same way the stress-memory CR does.
+# PodChaos: kill the frontend `server` container every 2 minutes for a
+# 5-minute window. Distinct from stress-memory (which holds memory
+# until the kernel OOM-killer fires) — this is a deterministic
+# container-kill that mimics a memory-pressure / cgroup-OOM event the
+# kernel can't distinguish from a real one. The frontend pod will be
+# re-created by the Deployment; the restart counter + Loki `Killing`
+# log line surface in Prom/Loki the same way the stress-memory CR does.
 #
 # Why "container-kill" not "pod-kill": container-kill hits just the
-# first container in the pod, leaving the Pod's identity intact (same
-# UID, same IP, same restart count increment). Pod-kill terminates
-# the whole pod. The cgroup-OOM-killer does the former; this CR
-# reproduces that exact signature.
+# named container, leaving the Pod's identity intact (same UID, same
+# IP, same restart count increment). Pod-kill terminates the whole
+# pod. The cgroup-OOM-killer does the former; this CR reproduces that
+# exact signature.
+#
+# Why `containerNames: [server]` is mandatory (not optional): the
+# upstream Boutique frontend happens to have `server` as the first
+# container, but a future image change that adds an OTel sidecar
+# would make "first container" land on the sidecar, and the CR would
+# silently kill the wrong process. Pin the name.
+#
+# Schedule note: this CR and pod-kill.yaml both target app=frontend in
+# `default` and may co-fire on overlapping minutes. The C6 smoke-test
+# signal is "restart counter went up" — it does not attribute cause
+# between the two CRs. P7 evaluation runs that need per-CR attribution
+# will gate one or the other off (see docs/PROGRESS.md).
 #
 # Used by:
 #   - P7 evaluation (oom-kill scenario)
@@ -26,6 +38,7 @@
 # References:
 #   - chart 2.7.2 docs: https://chaos-mesh.org/docs/simulate-pod-chaos-on-kubernetes/
 #   - testbed/chaos/stress-memory.yaml (the related stress-fault)
+#   - testbed/chaos/pod-kill.yaml (the related pod-fault)
 
 apiVersion: chaos-mesh.org/v1alpha1
 kind: PodChaos
@@ -40,10 +53,8 @@ spec:
       - default
     labelSelectors:
       app: frontend
-  # containerNames is optional for container-kill; leaving it absent
-  # kills the first container in the pod (which is `server` for the
-  # Boutique frontend). For multi-container pods this would need
-  # explicit `containerNames: [server]`.
+    containerNames:
+      - server
   duration: "5m"
   scheduler:
     cron: "@every 2m"

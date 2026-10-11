@@ -215,7 +215,7 @@ check_pod_kill() {
       get podchaos -n "$CHAOS_NS" boutique-frontend-pod-kill \
       >/dev/null 2>&1; then
     log_fail "C6 pod-kill: boutique-frontend-pod-kill not found in ns=$CHAOS_NS"
-    log_warn "  fix: make chaos   (re-applies the 4 baseline CRs)"
+    log_warn "  fix: make chaos   (re-applies the 5 baseline CRs)"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return
   fi
