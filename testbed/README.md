@@ -57,11 +57,12 @@ make smoke-testbed # prove the P1 → P2 gate
 make down          # tear everything down
 ```
 
-> **Slice 1 status (2026-10-11):** `make up` is **Compose only** today (Redis + Postgres).
-> The full chain — `kind` → observability → Online Boutique → Chaos Mesh — lands in
-> P1 slice 5. If you run `make up` now and only see the Compose stack, that is correct.
-> If you need the cluster, follow the slice 2-4 commits in order on `dev-rifat` or
-> jump to the future `make testbed-up` target once slice 5 lands.
+> **Slice 5 status (2026-10-11):** `make up` chains the full testbed
+> (kind → observability → Online Boutique → Chaos Mesh → Compose) and
+> `make smoke-testbed` runs the 6-check P1 → P2 gate. If you run `make up`
+> and `make smoke-testbed` returns 6/6 green, the testbed is ready for
+> P2 (schema + event bus). If any check fails, follow the hint printed
+> by the failing check (or see §6 below).
 
 The slim default is designed for this dev box (7 GiB total RAM). It runs a
 1c1w kind cluster, single-replica observability pods with hard memory caps,

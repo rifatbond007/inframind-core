@@ -74,13 +74,16 @@ test-all: ## run all tests including integration
 	$(PYTEST) -q -m ""
 
 # --- dev stack ---
-# Step 0 (Redis + Postgres) lives here. The P1 testbed chain (kind,
-# observability, Online Boutique, Chaos Mesh) is added by the P1 slice 5
-# commit; see testbed/README.md for the planned order.
+# Slice 5 (P1): chain the full testbed onto `make up`. Make dependency
+# order is the chain order: kind -> obs -> boutique -> chaos -> compose.
+# The four testbed sub-targets each have their own pre-flight +
+# idempotency, so a second `make up` after `make down` is a no-op on
+# the cluster side. The recipe just runs Compose (no k8s dependency)
+# after the deps land.
 .PHONY: up
-up: ## start the local dev stack (Redis + Postgres). P1 testbed lands in slice 5.
+up: kind obs boutique chaos ## bring up Compose + the full testbed chain
 	$(COMPOSE) up -d
-	@echo "Stack up. Try: redis-cli -h localhost ping; psql postgresql://inframind:inframind@localhost:5432/inframind"
+	@echo "Stack + testbed up. Try: make smoke-testbed"
 
 .PHONY: down
 down: ## stop Compose + delete the kind cluster (full reset, incl. volumes)
@@ -225,11 +228,13 @@ chaos-delete: ## delete the 4 chaos CRs (but keep chaos-mesh installed)
 		delete podchaos,networkchaos,stresschaos --all -n $(CHAOS_TESTING_NS) --ignore-not-found
 
 .PHONY: smoke-testbed
-smoke-testbed: ## verify the P1 → P2 gate (lands fully in slice 5 of P1)
-	@echo "smoke-testbed is not yet implemented."
-	@echo "It will land in P1 slice 5 with the make up chain."
-	@echo "For now, see testbed/README.md §4 for the planned gate checks."
-	@exit 1
+smoke-testbed: ## verify the P1 → P2 gate (6 checks; see testbed/README.md §4)
+	@TESTBED_CONTEXT=$(TESTBED_CONTEXT) \
+	 TESTBED_KUBECONFIG=$(TESTBED_KUBECONFIG) \
+	 TESTBED_NS=$(TESTBED_NS) \
+	 CHAOS_TESTING_NS=$(CHAOS_TESTING_NS) \
+	 CHAOS_MESH_NS=$(CHAOS_MESH_NS) \
+	 bash testbed/smoke.sh
 
 # make testbed-full — UNCOMMENT on a 16+ GiB machine for the full-memory
 # profile (2c2w kind, replicas=2, retention 24h). The slim default is the
