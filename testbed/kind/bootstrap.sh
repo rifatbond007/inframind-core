@@ -99,12 +99,18 @@ kubectl --kubeconfig "$KUBECONFIG_PATH" --context "$CONTEXT_NAME" \
 # The kind node container is itself a Docker container. We mounted
 # its in-node containerd socket onto /var/run/docker.sock so the
 # chaos-daemon Pod can read it as a docker socket (see cluster.yaml).
-# Verify the control-plane node container has that mount.
+# Verify the control-plane node container has that mount. Without it,
+# chaos-mesh is dead — promote to a hard fail so the user doesn't
+# chase a chaos-mesh CrashLoop 10 minutes later with no clear root
+# cause.
 if docker exec "${CLUSTER_NAME}-control-plane" sh -c 'ls -l /var/run/docker.sock' >/dev/null 2>&1; then
   log_ok "D2 readiness: /var/run/docker.sock present inside the kind node container"
 else
-  log_warn "D2 readiness check failed: /var/run/docker.sock not visible inside the kind control-plane container."
-  log_warn "  Chaos Mesh (slice 4) will not be able to inject faults until this is fixed."
+  log_fail "D2 readiness check failed: /var/run/docker.sock not visible inside the kind control-plane container."
+  log_fail "  Chaos Mesh cannot inject faults without this mount."
+  log_fail "  Check testbed/kind/cluster.yaml extraMounts block on the control-plane node."
+  log_fail "  If you're on a SELinux-enforcing host, you may also need selinuxRelabel: true."
+  exit 1
 fi
 
 # --- summary ---

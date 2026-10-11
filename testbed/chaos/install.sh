@@ -96,8 +96,8 @@ log_ok "chaos-mesh ready"
 # --- apply the 4 chaos CRs (in the experiments namespace) ---
 # The CRs target `default` namespace pods but live in `chaos-testing`
 # to keep experiment bookkeeping separate from the SUT.
-log_info "applying 4 chaos CRs from $CHAOS_CR_DIR"
-for cr in pod-kill.yaml network-delay.yaml cpu-stress.yaml stress-memory.yaml; do
+log_info "applying 5 chaos CRs from $CHAOS_CR_DIR"
+for cr in pod-kill.yaml network-delay.yaml cpu-stress.yaml stress-memory.yaml oom-kill.yaml; do
   kubectl --kubeconfig "$KUBECONFIG_PATH" --context "$CONTEXT_NAME" \
     apply -f "$CHAOS_CR_DIR/$cr" -n "$CHAOS_NAMESPACE"
   log_ok "  applied $cr"

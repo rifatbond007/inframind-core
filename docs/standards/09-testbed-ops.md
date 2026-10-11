@@ -61,7 +61,7 @@ wipe the volumes. The Postgres and Redis volumes are gitignored.
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Chaos Mesh pods `CrashLoopBackOff` | Runtime not containerd. | Set `chaosDaemon.runtime=containerd` in the Chaos Mesh Helm values. |
+| Chaos Mesh pods `CrashLoopBackOff` | The kind node's in-container containerd socket is not visible to the chaos-daemon Pod. | `testbed/kind/cluster.yaml` `extraMounts` bind-mounts `/run/containerd/containerd.sock` to `/var/run/docker.sock` inside the kind node container; `testbed/helm-values/chaos-mesh.yaml` reads it via `chaosDaemon.runtime=docker` + `socketPath=/var/run/docker.sock` (the docker-runtime shim — see D2 in the decision tree). `make kind` runs a D2 readiness check that fails loudly if the mount is missing. On a SELinux-enforcing host, also set `selinuxRelabel: true` in the extraMounts. |
 | Prometheus OOMKilled | The default retention + scrape density is too high. | Reduce `--retention-size=10GB` and `--retention-time=6h` in the Helm values. |
 | Loki OOMKilled | Same. | Reduce ingestion rate; switch to a smaller schema. |
 | Memory pressure on host | Online Boutique + Prometheus + Loki + Jaeger + Chaos Mesh is tight on 16 GB. | 32 GB is recommended. Local VMs are fine; laptops struggle. |

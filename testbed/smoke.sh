@@ -83,7 +83,12 @@ check_compose() {
   fi
   local missing=()
   for svc in inframind-redis inframind-postgres; do
-    if ! printf '%s\n' "$compose_state" | awk -F'\t' -v s="$svc" '$1==s && $2=="running" {found=1} END{exit !found}'; then
+    # `docker compose ps --format '{{.State}}'` returns `running` for a
+    # healthy container but `running (healthy)` after the healthcheck
+    # passes (and `running (unhealthy)` on a probe failure). We accept
+    # `running` (alone) or `running (healthy)`, but reject
+    # `running (unhealthy)`, `exited`, `restarting`, `dead`.
+    if ! printf '%s\n' "$compose_state" | awk -F'\t' -v s="$svc" '$1==s && ($2 == "running" || $2 == "running (healthy)") {found=1} END{exit !found}'; then
       missing+=("$svc")
     fi
   done

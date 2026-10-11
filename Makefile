@@ -15,10 +15,17 @@ COMPOSE ?= docker compose
 KIND_VERSION         ?= v0.24.0
 KUBECTL_VERSION      ?= v1.30.0
 HELM_VERSION         ?= v3.15.4
-TESTBED_CONTEXT      ?= kind-inframind
+# The kind cluster's *name* (passed to `kind create/delete cluster --name`)
+# and the kubectl *context* name are different. kind adds the `kind-`
+# prefix when generating the context, so to get the canonical context
+# `kind-inframind` we name the cluster `inframind`. bootstrap.sh reads
+# `TESTBED_CLUSTER_NAME` with this default. Down here uses the same var
+# so `make down` deletes the right cluster.
+TESTBED_CLUSTER_NAME  ?= inframind
+TESTBED_CONTEXT       ?= kind-inframind
 # Where bootstrap.sh writes the kind kubeconfig. Per D23-scripts and the
 # standard, this never touches `~/.kube/config`.
-TESTBED_KUBECONFIG   ?= $(CURDIR)/testbed/.kube/config
+TESTBED_KUBECONFIG    ?= $(CURDIR)/testbed/.kube/config
 
 # --- testbed chart pins (slice 3 of P1) ---
 # Versions for the observability + SUT + chaos charts. `make obs` and
@@ -89,9 +96,9 @@ up: kind obs boutique chaos ## bring up Compose + the full testbed chain
 down: ## stop Compose + delete the kind cluster (full reset, incl. volumes)
 	$(COMPOSE) down -v
 	@if command -v kind >/dev/null 2>&1; then \
-		if [ -f "$(TESTBED_KUBECONFIG)" ] || kind get clusters 2>/dev/null | grep -q "^$(TESTBED_CONTEXT)$$"; then \
-			echo "Deleting kind cluster '$(TESTBED_CONTEXT)'..."; \
-			kind delete cluster --name $(TESTBED_CONTEXT) --kubeconfig $(TESTBED_KUBECONFIG) || true; \
+		if [ -f "$(TESTBED_KUBECONFIG)" ] || kind get clusters 2>/dev/null | grep -q "^$(TESTBED_CLUSTER_NAME)$$"; then \
+			echo "Deleting kind cluster '$(TESTBED_CLUSTER_NAME)' (context: $(TESTBED_CONTEXT))..."; \
+			kind delete cluster --name $(TESTBED_CLUSTER_NAME) --kubeconfig $(TESTBED_KUBECONFIG) || true; \
 		fi; \
 	else \
 		echo "kind not on PATH; skipping cluster teardown. Install it to fully clean up."; \
@@ -157,13 +164,16 @@ helm-check: ## verify helm $(HELM_VERSION) is on PATH
 
 .PHONY: kind kind-status kind-delete
 kind: kind-check ## create the kind-inframind cluster (idempotent; 1c1w slim default)
-	@bash testbed/kind/bootstrap.sh
+	@TESTBED_CLUSTER_NAME=$(TESTBED_CLUSTER_NAME) \
+	 TESTBED_CONTEXT=$(TESTBED_CONTEXT) \
+	 TESTBED_KUBECONFIG=$(TESTBED_KUBECONFIG) \
+	 bash testbed/kind/bootstrap.sh
 
 kind-status: ## show cluster nodes (--context kind-inframind, never the default context)
 	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) get nodes -o wide
 
-kind-delete: ## delete the kind-inframind cluster (used by make down and for clean resets)
-	@kind delete cluster --name $(TESTBED_CONTEXT) --kubeconfig $(TESTBED_KUBECONFIG)
+kind-delete: ## delete the inframind cluster (used by make down and for clean resets)
+	@kind delete cluster --name $(TESTBED_CLUSTER_NAME) --kubeconfig $(TESTBED_KUBECONFIG)
 
 .PHONY: obs
 obs: kind helm-check ## install observability stack (kube-prometheus-stack + Loki + Jaeger) into the kind cluster
