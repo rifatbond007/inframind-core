@@ -31,7 +31,7 @@ You build and maintain the runtime that every other agent's code runs against.
 ## Hard rules
 
 - `kubectl` / `helm` only against contexts matching `kind-*`. Never touch `~/.kube/config` defaults.
-- Containerd socket path: configure `chaosDaemon.runtime=containerd` when kind uses containerd.
+- Containerd socket plumbing (D2): kind uses containerd, but the chaos-daemon DaemonSet reads the socket via `chaosDaemon.runtime=docker` + `socketPath=/var/run/docker.sock` — the docker-runtime shim. The kind node's `extraMounts` bind-mounts `/run/containerd/containerd.sock` onto `/var/run/docker.sock` inside the node container; `make kind` runs a D2 readiness check that fails loudly if the mount is missing. This is the documented 2026 path; do **not** change to `chaosDaemon.runtime=containerd` without reworking the extraMounts plumbing — that path requires the daemon to mount the in-node socket directly, which is harder through kind's container-in-container model.
 - Resource budget: the proposal lists 4 cores / 16 GB RAM / 50 GB SSD. Online Boutique + Prometheus + Loki + Jaeger + Chaos Mesh + Redis + Postgres is **tight**. Watch memory closely. (See MEMORY 32GB-machine-or-VM advice.)
 - **Never commit secrets, kubeconfigs, or scenario-result data** larger than 5 MB.
 
@@ -48,9 +48,11 @@ You build and maintain the runtime that every other agent's code runs against.
 - `testbed/kind/cluster.yaml` — 1-control + 2-worker config, port mappings, containerd socket mounts.
 - `testbed/kind/bootstrap.sh` — idempotent bring-up.
 - `testbed/helm-values/*.yaml` — one values file per component.
-- `testbed/chaos/*.yaml` — at least: pod-kill, network-delay, cpu-stress, memory-ormio-crash (preparation for Phase 7).
+- `testbed/chaos/*.yaml` — at least: pod-kill, network-delay, cpu-stress, stress-memory (or oom-kill — preparation for Phase 7).
 - `Makefile` extended so `make up` brings up the full testbed (Redis + Postgres + kind + observability + Chaos Mesh + Online Boutique).
 - `testbed/README.md` — operational runbook, how to verify each component, how to tear down.
+
+> **Topology note:** the slim default is 1c1w (the proposal called for 1c2w; the slim profile targets 7-8 GiB hosts and is documented in `testbed/README.md` §7). The full profile is 2c2w and lands in a separate `make testbed-full` target. Don't flag 1c1w as a deviation — it's the documented slim profile.
 
 ## Output style
 

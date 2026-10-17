@@ -1,0 +1,59 @@
+# testbed/chaos/network-delay.yaml
+#
+# NetworkChaos: add 200ms ± 50ms latency on traffic from
+# `recommendationservice` to `productcatalogservice`, sustained for
+# 5 minutes. This exercises:
+#   - Prometheus: the recommendationservice's request_duration_seconds
+#     p95 should jump
+#   - Loki: a "connection slow" or similar warning in recommendationservice
+#   - Jaeger: traces between the two services show a 200ms gap
+#
+# Used by:
+#   - P7 evaluation scenarios (latency-regression detection)
+#   - P4 detection: error spike + latency regression rules fire
+#
+# Apply with:
+#   kubectl --context kind-inframind apply -f testbed/chaos/network-delay.yaml
+# Cleanup:
+#   kubectl --context kind-inframind delete -f testbed/chaos/network-delay.yaml
+#
+# Why "all" mode (not "all-but"): the networkchaos controller injects
+# the tc qdisc into the target pod's network namespace on the worker
+# node. The DaemonSet is `hostNetwork: true` so it sees pod traffic.
+#
+# References:
+#   - chart 2.7.2 docs: https://chaos-mesh.org/docs/simulate-network-chaos-on-kubernetes/
+#   - D22 (K8s change watcher): docs/decision-tree.md
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: NetworkChaos
+metadata:
+  name: recommendationservice-to-productcatalogservice-delay
+  namespace: chaos-testing
+spec:
+  action: delay
+  mode: all
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      app: recommendationservice
+  delay:
+    latency: "200ms"
+    jitter: "50ms"
+    correlation: "75"
+  direction: to
+  target:
+    # NetworkChaos.spec.target.mode is REQUIRED in chart 2.7.2 (enum:
+    # one / all / fixed / fixed-percent / random-max-percent). Without
+    # it the CR fails CRD validation with
+    # `spec.target.mode: Unsupported value: ""`. `one` picks a single
+    # target pod to inject the tc qdisc into; for "all instances of
+    # the destination service", use `mode: all` instead.
+    mode: one
+    selector:
+      namespaces:
+        - default
+      labelSelectors:
+        app: productcatalogservice
+  duration: "5m"

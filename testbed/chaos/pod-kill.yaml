@@ -1,0 +1,44 @@
+# testbed/chaos/pod-kill.yaml
+#
+# PodChaos: kill the `frontend` pod once on apply, bounded to a 5-min
+# window. This is the P1 → P2 gate check #6 — Prometheus records a
+# `kube_pod_container_status_restarts_total` increment, Loki shows
+# a `Killing` log line, and (if OTel is wired) Jaeger shows a
+# `frontend` trace ending in error.
+#
+# Why no `scheduler.cron`: chaos-mesh 2.7.x dropped the `scheduler`
+# field on individual CRs (PodChaos/StressChaos/NetworkChaos). The
+# CRD now has `duration:` only; scheduling moved to a separate
+# `Workflow` resource (the `workflows` controller). For the smoke
+# test we don't need scheduling — `duration: "5m"` makes the CR
+# fire once on apply and clean up after 5 minutes. P7 evaluation
+# will use a Workflow to repeat on a cron schedule.
+#
+# Apply with:
+#   kubectl --context kind-inframind apply -f testbed/chaos/pod-kill.yaml
+# Then wait ~30s and check:
+#   kubectl --context kind-inframind get podchaos -n chaos-testing
+#   promtool query instant http://localhost:30090 \
+#     'sum(increase(kube_pod_container_status_restarts_total{namespace="default",pod=~"frontend-.*"}[5m]))'
+#
+# Cleanup with:
+#   kubectl --context kind-inframind delete -f testbed/chaos/pod-kill.yaml
+#
+# References:
+#   - testbed/README.md §4 (P1 → P2 gate check #6)
+#   - docs/standards/09-testbed-ops.md §9.4 (chaos guard rails)
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: boutique-frontend-pod-kill
+  namespace: chaos-testing
+spec:
+  action: pod-kill
+  mode: all
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      app: frontend
+  duration: "5m"

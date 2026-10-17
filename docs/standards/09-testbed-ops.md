@@ -9,13 +9,15 @@ make up
 
 This is the single command to rule them all. It brings up, in order:
 
-1. **Docker Compose** — Redis 7 and PostgreSQL 16 (in `inframind-net`).
-2. **`kind` cluster** — 1 control + 2 workers (`kind-inframind`).
-3. **Helm — kube-prometheus-stack** — Prometheus + Alertmanager + Grafana.
-4. **Helm — Loki** — log storage with Promtail / Grafana Alloy.
-5. **Helm — Jaeger / OTel Collector** — distributed tracing.
-6. **Helm — Chaos Mesh** — fault injection (P7+).
-7. **`kubectl apply` — Online Boutique + load generator** — system under test.
+1. **`kind` cluster** — 1 control + 1 worker (`inframind`; context `kind-inframind`).
+   The slim default targets 7-8 GiB hosts (see `testbed/README.md` §7). The
+   `make testbed-full` profile runs 1c2w on a 16+ GiB host.
+2. **Helm — kube-prometheus-stack** — Prometheus + Alertmanager + Grafana.
+3. **Helm — Loki** — log storage with Promtail / Grafana Alloy.
+4. **Helm — Jaeger / OTel Collector** — distributed tracing.
+5. **Helm — Chaos Mesh** — fault injection (P7+).
+6. **`kubectl apply` — Online Boutique + load generator** — system under test.
+7. **Docker Compose** — Redis 7 and PostgreSQL 16 (in `inframind-net`).
 8. **`kubectl apply -f deploy/helm/inframind/`** — InfraMind itself, once the Helm chart lands
    in P8.
 
@@ -35,9 +37,9 @@ The smoke-test runs per-component health checks:
 | `redis-cli ping` | `PONG` |
 | `psql` connect | connects, `inframind` DB exists |
 | `kubectl get pods -A` | all pods `Running` |
-| `curl http://localhost:9090/-/ready` | Prometheus ready |
-| `curl http://localhost:3100/ready` | Loki ready |
-| `curl http://localhost:16686/` | Jaeger UI up |
+| `curl http://localhost:30090/api/v1/status/runtimeinfo` | Prometheus ready (`.data == "success"`) |
+| `curl http://localhost:30100/loki/api/v1/status/buildinfo` | Loki ready (200 with non-empty `.version`). The gateway's nginx does NOT proxy `/ready`; the smoke test uses the buildinfo path on purpose. |
+| `curl http://localhost:30686/` | Jaeger UI up (HTML page loads) |
 | Chaos Mesh pod-kill injected | Prometheus, Loki, Jaeger all see it |
 
 A green smoke-test is the precondition for any evaluation run. If a component is not ready,
@@ -54,17 +56,21 @@ Brings everything down and removes volumes. Use this when:
 - Switching test app.
 - Tearing down the cluster for a CI step.
 
-`make down` does not delete the kind Docker container by default; pass `DOWN_VOLUMES=1` to also
-wipe the volumes. The Postgres and Redis volumes are gitignored.
+`make down` is a full reset: it tears down Docker Compose *with volumes*
+(`docker compose down -v`) and deletes the kind cluster (`kind delete
+cluster`). The Postgres and Redis volumes are gitignored. There is no
+`DOWN_VOLUMES` knob — full reset is the only behavior, by design (partial
+teardown leaves a half-configured cluster that's harder to reason about
+than a clean rebuild).
 
 ## 9.4 Common issues
 
 | Symptom | Cause | Fix |
 |---|---|---|
-| Chaos Mesh pods `CrashLoopBackOff` | Runtime not containerd. | Set `chaosDaemon.runtime=containerd` in the Chaos Mesh Helm values. |
+| Chaos Mesh pods `CrashLoopBackOff` | The kind node's in-container containerd socket is not visible to the chaos-daemon Pod. | `testbed/kind/cluster.yaml` `extraMounts` bind-mounts `/run/containerd/containerd.sock` to `/var/run/docker.sock` inside the kind node container; `testbed/helm-values/chaos-mesh.yaml` reads it via `chaosDaemon.runtime=docker` + `socketPath=/var/run/docker.sock` (the docker-runtime shim — see D2 in the decision tree). `make kind` runs a D2 readiness check that fails loudly if the mount is missing. On a SELinux-enforcing host, also set `selinuxRelabel: true` in the extraMounts. |
 | Prometheus OOMKilled | The default retention + scrape density is too high. | Reduce `--retention-size=10GB` and `--retention-time=6h` in the Helm values. |
 | Loki OOMKilled | Same. | Reduce ingestion rate; switch to a smaller schema. |
-| Memory pressure on host | Online Boutique + Prometheus + Loki + Jaeger + Chaos Mesh is tight on 16 GB. | 32 GB is recommended. Local VMs are fine; laptops struggle. |
+| Memory pressure on host | Online Boutique + Prometheus + Loki + Jaeger + Chaos Mesh is tight on 16 GB. | 32 GB is recommended for eval runs; the slim 1c1w profile (`testbed/README.md` §7) targets 7-8 GiB. |
 | Port collision on 6379 / 5432 / 9090 / 3100 / 16686 / 9093 | A previous run, a sibling project, or a system service. | Free the port, or edit the docker-compose / Helm values to remap. |
 | `kubectl` against the wrong context | The default context may not be `kind-inframind`. | Always pass `--context kind-inframind`. Or set `kubectl config use-context kind-inframind` for the session. |
 | Jaeger shows no traces | The OTel Collector is mis-piped, or the Online Boutique app is not instrumented. | Check the Online Boutique sidecar / DaemonSet. Online Boutique ships with OTel instrumentation; if the env vars are not set, no traces. |

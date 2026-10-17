@@ -1,0 +1,57 @@
+# testbed/chaos/stress-memory.yaml
+#
+# StressChaos: hold 200 MiB resident in the `cartservice` Pod
+# for 5 minutes. On a 7 GiB host with the 128 MiB upstream cap, this
+# should drive cartservice to OOMKill and re-create — exercising the
+# restart counter + Loki `Killing` log line in Prometheus/Loki.
+#
+# Used by:
+#   - P7 evaluation (memory-leak / OOM scenario)
+#   - P4 detection (error spike on the OOM event)
+#
+# Apply:
+#   kubectl --context kind-inframind apply -f testbed/chaos/stress-memory.yaml
+# Cleanup:
+#   kubectl --context kind-inframind delete -f testbed/chaos/stress-memory.yaml
+#
+# NB: 200 MiB on a 128 MiB-limit container = guaranteed OOM. The
+# pod will restart; the upstream cartservice has a 5s initialDelay on
+# the readiness probe, so the smoke-test assertion runs within 30s.
+#
+# Why `oomScoreAdj: 1000` (not 0): the kernel OOM-killer picks the
+# highest `oom_score` when memory runs out. With the default 0, the
+# kernel may pick a different process inside the stress container
+# (or even chaos-daemon's sidecar) before the stress allocator —
+# producing a "process disappeared" event instead of the clean
+# "cartservice OOMKilled" the runbook expects. Setting 1000 biases
+# the kernel to kill the stress allocator first, which then frees
+# memory and prevents the OOM from cascading. This is a known
+# gotcha with stress-ng inside cgroups; see issue chaos-mesh #3104.
+#
+# References:
+#   - chart 2.7.2 docs: https://chaos-mesh.org/docs/simulate-memory-stress-on-kubernetes/
+#   - testbed/README.md §6 (troubleshooting OOMKilled)
+#   - testbed/chaos/oom-kill.yaml (the deterministic counterpart;
+#     uses PodChaos container-kill instead of kernel OOM)
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: cartservice-memory-stress
+  namespace: chaos-testing
+spec:
+  mode: all
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      app: cartservice
+  stressors:
+    memory:
+      workers: 1
+      size: "200Mi"
+      time: "5m"
+      # Bias kernel OOM-killer toward the stress-allocator process
+      # (see the comment header).
+      oomScoreAdj: 1000
+  duration: "5m"

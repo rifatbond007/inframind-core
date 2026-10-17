@@ -1,0 +1,6 @@
+microservices-demo v0.10.7
+commit pinned: https://github.com/GoogleCloudPlatform/microservices-demo/releases/tag/v0.10.7
+vendored 2026-10-11 from the GitHub release tarball
+files: adservice.yaml, cartservice.yaml, checkoutservice.yaml, currencyservice.yaml, emailservice.yaml, frontend.yaml, kustomization.yaml, loadgenerator.yaml, paymentservice.yaml, productcatalogservice.yaml, recommendationservice.yaml, shippingservice.yaml
+upstream kustomization.yaml in this directory is the original (kept for reference); the top-level testbed/boutique/kustomization.yaml does NOT import it — it lists the 11 service files directly so our patches/ directory is the single source of overlay.
+re-vendor: download v0.10.7 release tarball, copy the 11 service files + kustomization.yaml here, `git diff` should show zero changes outside the patches/ directory.

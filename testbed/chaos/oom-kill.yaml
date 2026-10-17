@@ -1,0 +1,58 @@
+# testbed/chaos/oom-kill.yaml
+#
+# PodChaos: kill the frontend `server` container once on apply, bounded
+# to a 5-minute window. Distinct from stress-memory (which holds memory
+# until the kernel OOM-killer fires) — this is a deterministic
+# container-kill that mimics a memory-pressure / cgroup-OOM event the
+# kernel can't distinguish from a real one. The frontend pod will be
+# re-created by the Deployment; the restart counter + Loki `Killing`
+# log line surface in Prom/Loki the same way the stress-memory CR does.
+#
+# Why "container-kill" not "pod-kill": container-kill hits just the
+# named container, leaving the Pod's identity intact (same UID, same
+# IP, same restart count increment). Pod-kill terminates the whole
+# pod. The cgroup-OOM-killer does the former; this CR reproduces that
+# exact signature.
+#
+# Why `containerNames: [server]` is mandatory (not optional): the
+# upstream Boutique frontend happens to have `server` as the first
+# container, but a future image change that adds an OTel sidecar
+# would make "first container" land on the sidecar, and the CR would
+# silently kill the wrong process. Pin the name.
+#
+# Why no `scheduler.cron`: chaos-mesh 2.7.x dropped the `scheduler`
+# field on PodChaos/StressChaos/NetworkChaos — it moved to a separate
+# `Workflow` resource. For the smoke test we don't need scheduling;
+# `duration: "5m"` makes the CR fire once on apply. P7 evaluation
+# will wrap this in a Workflow to repeat.
+#
+# Used by:
+#   - P7 evaluation (oom-kill scenario)
+#   - P4 detection (error spike on the restart)
+#
+# Apply:
+#   kubectl --context kind-inframind apply -f testbed/chaos/oom-kill.yaml
+# Cleanup:
+#   kubectl --context kind-inframind delete -f testbed/chaos/oom-kill.yaml
+#
+# References:
+#   - chart 2.7.2 docs: https://chaos-mesh.org/docs/simulate-pod-chaos-on-kubernetes/
+#   - testbed/chaos/stress-memory.yaml (the related stress-fault)
+#   - testbed/chaos/pod-kill.yaml (the related pod-fault)
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: PodChaos
+metadata:
+  name: boutique-frontend-oom-kill
+  namespace: chaos-testing
+spec:
+  action: container-kill
+  mode: all
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      app: frontend
+    containerNames:
+      - server
+  duration: "5m"

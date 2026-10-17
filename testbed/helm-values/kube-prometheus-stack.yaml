@@ -1,0 +1,120 @@
+# testbed/helm-values/kube-prometheus-stack.yaml
+#
+# Slim-default values for the kube-prometheus-stack chart (55.7.0). Pinned
+# versions in the plan: chart 55.7.0 (Nov 2024). The values below are
+# tuned for the 7 GiB dev box (working set ≤ 5.5 GiB total across the
+# whole P1 stack) and assume the NodePort port maps already in
+# `testbed/kind/cluster.yaml` — the `service.type=NodePort` +
+# `service.nodePort` settings must stay in sync with those mappings.
+#
+# Memory levers if Prometheus OOMs on a busier scrape:
+#   1. drop `prometheus.resources.limits.memory` from 768Mi to 512Mi
+#   2. drop `prometheus.prometheusSpec.retention` from 6h to 4h
+#   3. drop `prometheus.prometheusSpec.retentionSize` from 10GB to 6GB
+# Document the change in docs/PROGRESS.md and keep the chart version
+# pinned.
+#
+# Why NodePort and not port-forward: standard 09 §9.5 + the P1→P2 gate
+# (smoke-testbed curls `localhost:<port>`) require the services to be
+# reachable from the host without per-pod port-forwards. The kind node
+# host-side port mappings in cluster.yaml (30090/30300/30093/30100/
+# 30686/30317/30318) cover exactly the observability stack's NodePort
+# range. If you change a port here, change the matching port in
+# cluster.yaml AND restart the kind cluster.
+#
+# References:
+#   - chart 55.7.0 values: https://github.com/prometheus-community/helm-charts/blob/kube-prometheus-stack-55.7.0/charts/kube-prometheus-stack/values.yaml
+#   - D4 (NodePort requirement): docs/decision-tree.md
+
+# --- Prometheus ---
+prometheus:
+  enabled: true
+  prometheusSpec:
+    replicas: 1
+    retention: 6h
+    retentionSize: "10GB"
+    resources:
+      limits:
+        cpu: 1
+        memory: 768Mi
+      requests:
+        cpu: 100m
+        memory: 256Mi
+    # Standard scrape config for kind: scrape the kubelet on the
+    # in-cluster cAdvisor port. The chart's default serviceMonitor
+    # selectors cover this; we don't need to override.
+    serviceMonitorSelectorNilUsesHelmValues: true
+  service:
+    type: NodePort
+    nodePort: 30090
+    port: 9090
+    targetPort: 9090
+
+# --- Alertmanager ---
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    replicas: 1
+    resources:
+      limits:
+        cpu: 200m
+        memory: 128Mi
+      requests:
+        cpu: 50m
+        memory: 64Mi
+  service:
+    type: NodePort
+    nodePort: 30093
+    port: 9093
+    targetPort: 9093
+
+# --- Grafana ---
+grafana:
+  enabled: true
+  # Default admin / password is admin / prom-operator; the dev box is
+  # local-only so this is fine. The standard 09 §9.6 "no real secrets"
+  # rule still applies — don't ship a production password here.
+  adminPassword: prom-operator
+  resources:
+    limits:
+      cpu: 200m
+      memory: 256Mi
+    requests:
+      cpu: 50m
+      memory: 128Mi
+  service:
+    type: NodePort
+    nodePort: 30300
+    port: 3000
+    targetPort: 3000
+  # Pre-load the observability stack as datasources so the smoke test
+  # and the eval dashboard (P7) work out of the box. The chart's
+  # default provisioning already marks Prometheus as the default
+  # datasource; do NOT set `isDefault: true` on additional entries
+  # (Grafana rejects "only one default per org").
+  additionalDataSources:
+    - name: Prometheus
+      type: prometheus
+      url: http://kube-prometheus-stack-prometheus:9090
+      access: proxy
+    - name: Loki
+      type: loki
+      url: http://loki-gateway:80
+      access: proxy
+    - name: Jaeger
+      type: jaeger
+      url: http://jaeger-query:16686
+      access: proxy
+
+# --- node-exporter, kube-state-metrics, etc. (chart defaults are fine) ---
+nodeExporter:
+  enabled: true
+kubeStateMetrics:
+  enabled: true
+
+# --- Operator toggles we don't need for the P1 smoke test ---
+# (disable to save a few MB of operator pods on the 7 GiB host)
+pushgateway:
+  enabled: false
+thanosRuler:
+  enabled: false

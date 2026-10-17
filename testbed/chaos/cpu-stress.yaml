@@ -1,0 +1,41 @@
+# testbed/chaos/cpu-stress.yaml
+#
+# StressChaos: pin 2 CPUs on the `adservice` Pod, sustained 5 minutes.
+# Exercises the Z-score / EWMA detection in P4 — the
+# `container_cpu_usage_seconds_total` series for the ad service jumps.
+#
+# Used by:
+#   - P7 evaluation (cpu-saturation scenario)
+#   - P4 detection rules (error spike + EWMA)
+#
+# Apply:
+#   kubectl --context kind-inframind apply -f testbed/chaos/cpu-stress.yaml
+# Cleanup:
+#   kubectl --context kind-inframind delete -f testbed/chaos/cpu-stress.yaml
+#
+# NB: on a 7 GiB host, sustained 80% load on 2 cores in a 1c/1w cluster
+# can starve the load generator. We limit workers=1 so chaos-daemon
+# doesn't pin all available cores. The 2-worker allocation is enough
+# to trigger a real CPU saturation signal without taking down neighbors.
+#
+# References:
+#   - chart 2.7.2 docs: https://chaos-mesh.org/docs/simulate-heavy-stress-on-kubernetes/
+#   - docs/standards/04-detection.md (P4 detection rules)
+
+apiVersion: chaos-mesh.org/v1alpha1
+kind: StressChaos
+metadata:
+  name: adservice-cpu-stress
+  namespace: chaos-testing
+spec:
+  mode: all
+  selector:
+    namespaces:
+      - default
+    labelSelectors:
+      app: adservice
+  stressors:
+    cpu:
+      workers: 2
+      load: 80
+  duration: "5m"
