@@ -60,6 +60,7 @@ resources:
 patchesStrategicMerge:
 - patches/memory-patches.yaml
 - patches/loadgenerator-scale.yaml
+- patches/tracing.yaml
 
 # Common label so we can find the whole stack with one selector
 # (`kubectl get all -n default -l app.kubernetes.io/part-of=boutique`).

@@ -26,10 +26,12 @@ KUBECONFIG_PATH="${TESTBED_KUBECONFIG:-$REPO_ROOT/testbed/.kube/config}"
 KPS_CHART_VERSION="${KPS_CHART_VERSION:-55.7.0}"
 LOKI_CHART_VERSION="${LOKI_CHART_VERSION:-6.21.0}"
 JAEGER_CHART_VERSION="${JAEGER_CHART_VERSION:-3.3.0}"
+ALLOY_CHART_VERSION="${ALLOY_CHART_VERSION:-1.13.1}"
 MONITORING_NAMESPACE="${TESTBED_NS:-monitoring}"
 KPS_RELEASE="${KPS_RELEASE:-kube-prometheus-stack}"
 LOKI_RELEASE="${LOKI_RELEASE:-loki}"
 JAEGER_RELEASE="${JAEGER_RELEASE:-jaeger}"
+ALLOY_RELEASE="${ALLOY_RELEASE:-alloy}"
 VALUES_DIR="$REPO_ROOT/testbed/helm-values"
 WAIT_TIMEOUT="${OBS_WAIT_TIMEOUT:-600s}"
 
@@ -37,7 +39,7 @@ log_info "observability install"
 log_info "  context     : $CONTEXT_NAME"
 log_info "  namespace   : $MONITORING_NAMESPACE"
 log_info "  values dir  : $VALUES_DIR"
-log_info "  versions    : kps=$KPS_CHART_VERSION, loki=$LOKI_CHART_VERSION, jaeger=$JAEGER_CHART_VERSION"
+log_info "  versions    : kps=$KPS_CHART_VERSION, loki=$LOKI_CHART_VERSION, jaeger=$JAEGER_CHART_VERSION, alloy=$ALLOY_CHART_VERSION"
 
 # --- pre-flight: kind on PATH ---
 if ! command -v kind >/dev/null 2>&1; then
@@ -168,6 +170,21 @@ helm upgrade --install "$JAEGER_RELEASE" \
   --values "$VALUES_DIR/jaeger.yaml" \
   --wait --timeout "$WAIT_TIMEOUT"
 log_ok "jaeger ready"
+kubectl --kubeconfig "$KUBECONFIG_PATH" --context "$CONTEXT_NAME" \
+  apply -f "$REPO_ROOT/testbed/obs/jaeger-nodeports.yaml" >/dev/null
+log_ok "jaeger NodePorts applied (30686 UI, 30317/30318 OTLP)"
+
+# --- install: Alloy (pod logs -> Loki) ---
+log_info "installing alloy chart $ALLOY_CHART_VERSION (pod log shipper)"
+helm upgrade --install "$ALLOY_RELEASE" \
+  grafana/alloy \
+  --kube-context "$CONTEXT_NAME" \
+  --kubeconfig "$KUBECONFIG_PATH" \
+  --namespace "$MONITORING_NAMESPACE" \
+  --version "$ALLOY_CHART_VERSION" \
+  --values "$VALUES_DIR/alloy.yaml" \
+  --wait --timeout "$WAIT_TIMEOUT"
+log_ok "alloy ready"
 
 # --- summary ---
 log_ok "observability stack is up"

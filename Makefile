@@ -35,6 +35,7 @@ TESTBED_KUBECONFIG    ?= $(CURDIR)/testbed/.kube/config
 KPS_CHART_VERSION    ?= 55.7.0
 LOKI_CHART_VERSION   ?= 6.21.0
 JAEGER_CHART_VERSION ?= 3.3.0
+ALLOY_CHART_VERSION  ?= 1.13.1
 CHAOS_MESH_CHART_VERSION ?= 2.7.2
 TESTBED_NS           ?= monitoring
 # Online Boutique is vendored from github.com/GoogleCloudPlatform/microservices-demo
@@ -182,10 +183,11 @@ kind-delete: ## delete the inframind cluster (used by make down and for clean re
 	@kind delete cluster --name $(TESTBED_CLUSTER_NAME) --kubeconfig $(TESTBED_KUBECONFIG)
 
 .PHONY: obs
-obs: kind helm-check ## install observability stack (kube-prometheus-stack + Loki + Jaeger) into the kind cluster
+obs: kind helm-check ## install observability stack (kube-prometheus-stack + Loki + Jaeger + Alloy) into the kind cluster
 	@KPS_CHART_VERSION=$(KPS_CHART_VERSION) \
 	 LOKI_CHART_VERSION=$(LOKI_CHART_VERSION) \
 	 JAEGER_CHART_VERSION=$(JAEGER_CHART_VERSION) \
+	 ALLOY_CHART_VERSION=$(ALLOY_CHART_VERSION) \
 	 TESTBED_CLUSTER_NAME=$(TESTBED_CLUSTER_NAME) \
 	 TESTBED_CONTEXT=$(TESTBED_CONTEXT) \
 	 TESTBED_KUBECONFIG=$(TESTBED_KUBECONFIG) \
