@@ -37,7 +37,7 @@ The smoke-test runs per-component health checks:
 | `redis-cli ping` | `PONG` |
 | `psql` connect | connects, `inframind` DB exists |
 | `kubectl get pods -A` | all pods `Running` |
-| `curl http://localhost:30090/api/v1/status/runtimeinfo` | Prometheus ready (`.data == "success"`) |
+| `curl http://localhost:30090/api/v1/status/runtimeinfo` | Prometheus ready (`.status == "success"`) |
 | `curl http://localhost:30100/loki/api/v1/status/buildinfo` | Loki ready (200 with non-empty `.version`). The gateway's nginx does NOT proxy `/ready`; the smoke test uses the buildinfo path on purpose. |
 | `curl http://localhost:30686/` | Jaeger UI up (HTML page loads) |
 | Chaos Mesh pod-kill injected | Prometheus, Loki, Jaeger all see it |
