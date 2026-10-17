@@ -30,7 +30,7 @@ apiVersion: kind.x-k8s.io/v1alpha4
 # Cluster name is `inframind`. kind's convention prefixes the
 # context name with `kind-`, so the kubectl context becomes
 # `kind-inframind` (canonical) and the Docker containers become
-# `kind-inframind-control-plane` / `kind-inframind-worker`.
+# `inframind-control-plane` / `inframind-worker`.
 # (Verified empirically — naming the cluster `kind-inframind` would
 # produce context `kind-kind-inframind`, which is wrong.)
 name: inframind

@@ -95,12 +95,12 @@ up: kind obs boutique chaos ## bring up Compose + the full testbed chain
 .PHONY: down
 down: ## stop Compose + delete the kind cluster (full reset, incl. volumes)
 	$(COMPOSE) down -v
+	@# No `#` comments inside the backslash-continued block below: make joins
+	@# the lines into one, so the first `#` would comment out the rest and the
+	@# shell would fail with "expecting fi". Check both the testbed kubeconfig
+	@# file and the host's kind cluster list; pass --kubeconfig so the check
+	@# does not read a stale $$KUBECONFIG from a prior session.
 	@if command -v kind >/dev/null 2>&1; then \
-		# Check both the testbed kubeconfig file and the host's kind
-		# cluster list (kind reads its own state from $$HOME/.kube/kind/*,
-		# not from the testbed kubeconfig). Pass --kubeconfig to the
-		# `kind get clusters` check so it doesn't read from $$KUBECONFIG
-		# (which may be set to a removed cluster from a prior session).
 		if [ -f "$(TESTBED_KUBECONFIG)" ] \
 		    || kind get clusters --kubeconfig $(TESTBED_KUBECONFIG) 2>/dev/null | grep -q "^$(TESTBED_CLUSTER_NAME)$$"; then \
 			echo "Deleting kind cluster '$(TESTBED_CLUSTER_NAME)' (context: $(TESTBED_CONTEXT))..."; \
