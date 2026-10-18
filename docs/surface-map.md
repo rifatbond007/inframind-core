@@ -72,6 +72,35 @@ Call edges travel on a separate stream: `GraphUpdate{caller, callee, latency_ms,
 - **Alertmanager** — pushed by webhook to `POST /webhooks/alertmanager`
   (`src/inframind/api/alertmanager.py`). It is the only ingress that is **not** a pull.
 
+## Anomalies and the incident stream
+
+Detection turns signals into `Anomaly` objects (`src/inframind/common/anomaly.py`) and the
+correlation worker publishes `Incident` snapshots to `stream:incidents`
+(`src/inframind/common/incident.py`). Both live in `common/` because RCA imports only `common`.
+
+```python
+class Anomaly(BaseModel):  # frozen, extra="forbid"
+    id: str                  # ULID
+    ts: datetime             # observation time of the source signal (tz-aware UTC)
+    detector: str            # "zscore" | "ewma" | "error_spike" | "latency_regression"
+    service: str             # canonical lower-kebab
+    signal_id: str           # the signal that fired
+    score: float             # raw detector score
+    severity: Severity       # info | warning | critical
+    attrs: dict[str, Any]    # detector context; always has "frozen"
+
+class Incident(BaseModel):   # the snapshot on stream:incidents, before RCA
+    id: str; revision: int   # a republish of the same id bumps revision (it counts publishes)
+    state: Literal["open", "acknowledged", "resolved", "expired"]
+    opened_at: datetime; updated_at: datetime; closed_at: datetime | None
+    title: str; services: list[str]; signals: list[str]   # signal ids, newest 200
+    anomalies: list[Anomaly]                              # newest 10 per detector, at most 50
+    severity: Severity
+```
+
+"Updating" is not a state. The `Incident` below is the stored/API shape: RCA adds `candidates`,
+`primary`, `summary` and `alerts` downstream; they are not on the stream.
+
 ## Incidents out
 
 An incident is what the world sees. A `Candidate` is one possible root cause with its evidence.
@@ -132,8 +161,10 @@ process **refuses to start** if a required key is missing.
 | `OLLAMA_HOST` | when provider is `OLLAMA` | `http://localhost:11434` | Local fallback |
 | `INFRAMIND_ENV` | yes | `dev` | `dev` / `test` / `prod` — gates redaction strictness |
 | `LOG_LEVEL` | no | `INFO` | `DEBUG` / `INFO` / `WARNING` / `ERROR` |
-| `BASELINE_FREEZE_WINDOW` | no | `300` | seconds — D4 decay window |
-| `DETECTION_CONCURRENCY` | no | `4` | per-stage worker count |
+| `BASELINE_FREEZE_WINDOW` | no | `300` | seconds — D4 freeze lease; renewed on every anomaly, so it only expires if the tracker stops renewing |
+| `INFRAMIND_CORRELATION_COOLDOWN_S` | no | `120` | seconds of signal-time quiet before an incident resolves |
+| `INFRAMIND_DETECTION_<DETECTOR>_<PARAM>` | no | see standard 05 §5.5 | per-detector tunables, e.g. `INFRAMIND_DETECTION_ZSCORE_THRESHOLD` |
+| `DETECTION_CONCURRENCY` | no | — | **not implemented**: one worker (YAGNI) |
 | `RCA_GRAPH_PATH` | no | `data/service-graph.json` | Built by the testbed engineer |
 | `EVAL_SEED` | only in `test` | `0` | Reproducibility for evaluation (D6) |
 

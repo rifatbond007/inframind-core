@@ -80,7 +80,7 @@ import `detection` (standards 01 §1.3). New and changed modules:
 | Module | Responsibility |
 |---|---|
 | `common/anomaly.py` | `Anomaly` (frozen pydantic): `id` ULID, `ts`, `detector`, `service`, `signal_id`, `score`, `severity: Severity`, `attrs`. Std 05 §5.5 plus `id` and `ts` (MTTD and windows need them). |
-| `common/incident.py` | `Incident` wire model: `id`, `revision`, `state`, `opened_at`, `updated_at`, `closed_at`, `title`, `services`, `signals` (ids), `anomalies` (newest 50), `severity`. RCA outputs (candidates, summary, alerts) are added downstream, not on this stream. |
+| `common/incident.py` | `Incident` wire model: `id`, `revision`, `state`, `opened_at`, `updated_at`, `closed_at`, `title`, `services`, `signals` (ids), `anomalies` (newest 10 per detector, at most 50), `severity`. RCA outputs (candidates, summary, alerts) are added downstream, not on this stream. |
 | `common/bus.py` | `publish_incident(client, incident)` to `stream:incidents` (pinned). |
 | `detection/config.py` | typed params + `from_env()` for `INFRAMIND_DETECTION_*`; metric profiles (floors, counter flag). |
 | `detection/base.py` | `Detector` protocol (`update`, `freeze`, `unfreeze`), per-series idempotence guard (skip `ts` ≤ last seen). |

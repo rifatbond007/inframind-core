@@ -162,7 +162,7 @@ a `random.random()`.
 
 | Metric | What it measures |
 |---|---|
-| MTTD | Mean time to detect — fault injection time to first `Anomaly`. |
+| MTTD | Mean time to detect — fault injection time to the first `Anomaly.ts` (observation time of the signal that fired). The metric path cannot beat the 30 s cAdvisor scrape interval plus the collector's poll interval. |
 | MTTDg | Mean time to detection (ground-truth-anchored) — same, with the GT as the start. |
 | Alert precision | Of alerts sent, how many pointed at the GT root cause. |
 | Alert recall | Of all faults, how many produced an alert pointing at the GT root cause. |

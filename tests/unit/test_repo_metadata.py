@@ -86,6 +86,10 @@ REMOVED_NAMES = [
     r"api\.webhooks",
     r"from dateutil",
     r"(?<!webhooks)(?<!api)/alertmanager\b(?!\.py)",
+    r"or 1e-9",
+    r"detection\.severity",
+    r"severity_from_zscore",
+    r"window=300s",
 ]
 
 
@@ -123,3 +127,67 @@ def test_stale_route_pattern_catches_the_old_forms_and_spares_the_new_ones() -> 
     ]
     assert all(re.search(pattern, line) for line in stale)
     assert not any(re.search(pattern, line) for line in fine)
+
+
+def _read(relative: str) -> str:
+    return (ROOT / relative).read_text()
+
+
+def test_standard_05_matches_the_detector_api() -> None:
+    text = _read("docs/standards/05-add-detector.md")
+    for needle in (
+        "freeze(service, ts)",
+        "BASELINE_FREEZE_WINDOW",
+        "INFRAMIND_DETECTION_",
+        "common/anomaly.py",
+        "keeps scoring",
+        "make smoke-detection",
+    ):
+        assert needle in text, f"standard 05 should mention {needle!r}"
+    assert "return None  # D4" not in text
+
+
+def test_detection_agent_matches_the_code() -> None:
+    from inframind.detection.config import (
+        ErrorSpikeParams,
+        EwmaParams,
+        LatencyParams,
+        ZScoreParams,
+    )
+
+    agent = _read(".claude/agents/build/detection-engineer.md")
+    rows = [line for line in agent.splitlines() if line.startswith("| `") and ".py`" in line]
+    assert len(rows) == 4
+    for row in rows:
+        name = re.search(r"`(\w+\.py)`", row)
+        assert name and (ROOT / "src" / "inframind" / "detection" / name.group(1)).exists()
+    z, e, es, lat = ZScoreParams(), EwmaParams(), ErrorSpikeParams(), LatencyParams()
+    for expected in (
+        f"window={z.window}",
+        f"threshold={z.threshold:g}",
+        f"alpha={e.alpha:g}",
+        f"sigma_k={e.sigma_k:g}",
+        f"min_count={es.min_count}",
+        f"regression_pct={lat.regression_pct:g}",
+        f"consecutive={lat.consecutive}",
+    ):
+        assert expected in agent, f"the detection agent should state {expected}"
+
+
+def test_correlation_agent_uses_the_surface_map_vocabulary() -> None:
+    agent = _read(".claude/agents/build/correlation-engineer.md")
+    assert "revision" in agent and "tracker.py" in agent and "worker.py" in agent
+    assert "open → updating → resolved" not in agent
+
+
+def test_surface_map_documents_the_new_wire_models() -> None:
+    text = _read("docs/surface-map.md")
+    assert "class Anomaly" in text and "revision" in text
+    assert "INFRAMIND_DETECTION_" in text and "INFRAMIND_CORRELATION_COOLDOWN_S" in text
+
+
+def test_common_modules_are_all_listed_in_the_structure_standard() -> None:
+    listed = _read("docs/standards/01-project-structure.md")
+    for module in sorted((ROOT / "src" / "inframind" / "common").glob("*.py")):
+        if module.name != "__init__.py":
+            assert f"`{module.name}`" in listed, f"standard 01 §1.4 should list {module.name}"
