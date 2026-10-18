@@ -22,6 +22,7 @@ from redis.asyncio import Redis
 from . import stream_keys
 from .exceptions import BusError
 from .graph_update import GraphUpdate
+from .incident import Incident
 from .logging import get_logger
 from .signal import Signal
 
@@ -76,6 +77,27 @@ async def publish_graph_update(
     try:
         entry_id = await client.xadd(
             stream, {_FIELD: update.model_dump_json()}, maxlen=maxlen, approximate=True
+        )
+    except redis_exc.RedisError as e:
+        raise BusError(f"publish to {stream} failed: {e}") from e
+    return str(entry_id.decode() if isinstance(entry_id, bytes) else entry_id)
+
+
+async def publish_incident(
+    client: Redis,
+    incident: Incident,
+    *,
+    stream: str = stream_keys.INCIDENTS,
+    maxlen: int = DEFAULT_MAXLEN,
+) -> str:
+    """XADD an `Incident` snapshot to `stream:incidents` and return the stream entry id.
+
+    Raises:
+        BusError: Redis was unreachable or rejected the write.
+    """
+    try:
+        entry_id = await client.xadd(
+            stream, {_FIELD: incident.model_dump_json()}, maxlen=maxlen, approximate=True
         )
     except redis_exc.RedisError as e:
         raise BusError(f"publish to {stream} failed: {e}") from e
