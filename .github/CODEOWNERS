@@ -1,33 +1,33 @@
 # CODEOWNERS — every PR touching a path notifies the listed reviewers.
 # GitHub will auto-request review from the owners listed below.
-# Fill in real GitHub handles when the team accounts are known.
+# Handles are the GitHub usernames from D25 (user.name == email local part).
 
 # Default: any change notifies everyone.
-/* @inframind-team
+/* @rifatbond007 @moneem-07 @promerayhan
 
 # Testbed + deploy (Rifat)
-/testbed/        @rifatbroh
-/deploy/         @rifatbroh
-/Makefile        @rifatbroh
-/docker-compose.yml @rifatbroh
-/Dockerfile      @rifatbroh
+/testbed/        @rifatbond007
+/deploy/         @rifatbond007
+/Makefile        @rifatbond007
+/docker-compose.yml @rifatbond007
+/Dockerfile      @rifatbond007
 
 # Ingestion, detection, correlation (Moneem)
-/src/inframind/ingestion/   @moneem
-/src/inframind/detection/   @moneem
-/src/inframind/correlation/ @moneem
-/tests/                     @moneem
+/src/inframind/ingestion/   @moneem-07
+/src/inframind/detection/   @moneem-07
+/src/inframind/correlation/ @moneem-07
+/tests/                     @moneem-07
 
 # RCA, LLM, alerting, storage (Prome)
-/src/inframind/rca/       @prome
-/src/inframind/llm/       @prome
-/src/inframind/alerting/  @prome
-/src/inframind/storage/   @prome
-/src/inframind/api/       @prome
-/evaluation/              @prome
+/src/inframind/rca/       @promerayhan
+/src/inframind/llm/       @promerayhan
+/src/inframind/alerting/  @promerayhan
+/src/inframind/storage/   @promerayhan
+/src/inframind/api/       @promerayhan
+/evaluation/              @rifatbond007
 
 # Docs + paper — all three
-/docs/        @rifatbroh @moneem @prome
-/paper/       @rifatbroh @moneem @prome
-/CLAUDE.md    @rifatbroh @moneem @prome
-/README.md    @rifatbroh @moneem @prome
+/docs/        @rifatbond007 @moneem-07 @promerayhan
+/paper/       @rifatbond007 @moneem-07 @promerayhan
+/CLAUDE.md    @rifatbond007 @moneem-07 @promerayhan
+/README.md    @rifatbond007 @moneem-07 @promerayhan

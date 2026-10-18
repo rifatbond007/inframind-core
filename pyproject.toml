@@ -47,7 +47,7 @@ dev = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/BAIUST-CSE/inframind"
+Homepage = "https://github.com/rifatbond007/inframind-core"
 
 # --- ruff ---
 [tool.ruff]

@@ -1,7 +1,7 @@
 ---
 name: detection-engineer
 description: "Owns statistical anomaly detectors (Z-score, EWMA, log error-rate spike, trace p95 latency regression). Lives under src/inframind/detection/."
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

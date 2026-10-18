@@ -1,7 +1,7 @@
 ---
 name: testbed-engineer
 description: Owns the kind cluster, observability stack, Chaos Mesh, and the sample microservice application. Lives under testbed/ and deploys the runtime InfraMind will hit.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

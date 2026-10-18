@@ -1,7 +1,7 @@
 ---
 name: ingestion-engineer
 description: Owns the collectors that pull Prometheus metrics, Loki logs, Jaeger/OTLP traces, and Alertmanager alerts into the unified Signal stream. Lives under src/inframind/ingestion/.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

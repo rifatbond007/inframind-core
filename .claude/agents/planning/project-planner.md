@@ -1,7 +1,7 @@
 ---
 name: project-planner
 description: Owns the phase plan, scheduling, and dependency map for InfraMind. Reads CLAUDE.md, docs/PROGRESS.md, docs/decision-tree.md, and the proposal to keep work sequenced.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash
 ---
 

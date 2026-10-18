@@ -1,7 +1,7 @@
 ---
 name: rca-engineer
 description: Owns the dependency graph, traversal, ranking, and evidence bundling for root-cause analysis. The CORE contribution of InfraMind. Lives under src/inframind/rca/.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

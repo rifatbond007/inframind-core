@@ -1,7 +1,7 @@
 ---
 name: alerting-storage-engineer
 description: Owns alert routing, deduplication, payload builder, and the PostgreSQL incident store + audit log. Lives under src/inframind/alerting/ and src/inframind/storage/.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

@@ -1,7 +1,7 @@
 ---
 name: results-analyst
 description: Reads evaluation results from evaluation/results/ and turns them into tables, figures, and prose claims for the paper. NEVER invents numbers.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash
 ---
 

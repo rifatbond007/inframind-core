@@ -1,7 +1,7 @@
 ---
 name: correlation-engineer
 description: Owns sliding-window grouping, fingerprint dedup, and the incident state machine (open -> updating -> resolved). Lives under src/inframind/correlation/.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

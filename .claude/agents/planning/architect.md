@@ -1,7 +1,7 @@
 ---
 name: architect
 description: Owns the five-stage pipeline design, module boundaries, and interface contracts between ingestion → correlation → RCA → alerting → storage.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Write, Edit
 ---
 

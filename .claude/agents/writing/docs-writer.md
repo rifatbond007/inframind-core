@@ -1,7 +1,7 @@
 ---
 name: docs-writer
 description: "Maintains project documentation (README, ARCHITECTURE, REPO_LAYOUT, CONTRIBUTING, PROGRESS, decision-tree). Owns the in-repo docs."
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Write, Edit
 ---
 

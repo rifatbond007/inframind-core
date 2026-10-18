@@ -1,7 +1,7 @@
 ---
 name: code-reviewer
 description: Reviews PRs for correctness, style, reproducibility, and adherence to the locked design decisions (D1-D25). Lives in the PR review flow.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash
 ---
 
