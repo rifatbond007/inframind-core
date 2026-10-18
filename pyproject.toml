@@ -28,12 +28,15 @@ classifiers = [
 # New deps are added as their owning phase lands (ingestion, detection, rca, llm, ...).
 dependencies = [
     "pydantic>=2.6,<3",
+    "redis>=5.0",
 ]
 
 [project.optional-dependencies]
 dev = [
     "pytest>=8.0",
     "pytest-cov>=4.1",
+    "pytest-asyncio>=0.23",
+    "fakeredis>=2.23",
     "ruff>=0.4",
     "mypy>=1.10",
     "pre-commit>=3.7",
@@ -74,6 +77,7 @@ files = ["src"]
 # --- pytest ---
 [tool.pytest.ini_options]
 minversion = "8.0"
+asyncio_mode = "auto"
 testpaths = ["tests"]
 addopts = ["-ra", "--strict-markers", "--strict-config"]
 markers = [
