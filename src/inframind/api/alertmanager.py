@@ -19,6 +19,7 @@ from redis.asyncio import Redis
 from inframind.common.bus import publish
 from inframind.common.exceptions import BusError
 from inframind.common.logging import get_logger
+from inframind.common.redact import redact_mapping
 from inframind.common.signal import (
     Severity,
     Signal,
@@ -83,7 +84,7 @@ def _alert_to_signal(
             "status": status,
             "fingerprint": str(alert.get("fingerprint", "")),
             "labels": labels,
-            "annotations": alert.get("annotations") or {},
+            "annotations": redact_mapping(alert.get("annotations") or {}),
             "starts_at": starts_at.isoformat(),
             "ends_at": None if ends_at == _NO_END else ends_at,
             "group_key": group_key,

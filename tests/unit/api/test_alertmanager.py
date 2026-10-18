@@ -215,3 +215,13 @@ async def test_service_from_pod_is_shared_with_the_prometheus_collector() -> Non
     from inframind.ingestion import prometheus
 
     assert prometheus.service_from_pod is service_from_pod
+
+
+def test_secrets_and_pii_in_annotations_are_redacted_but_labels_are_kept() -> None:
+    noisy = alert(
+        annotations={"description": "login for a@b.com from 10.1.2.3 password=hunter2"},
+    )
+    [sig] = alerts_to_signals(payload(noisy), request_id="r", ingested_at=NOW)
+    dumped = sig.attrs["annotations"]["description"]
+    assert "a@b.com" not in dumped and "10.1.2.3" not in dumped and "hunter2" not in dumped
+    assert sig.attrs["labels"]["pod"] == "frontend-5c744dd6bb-jfpxt"

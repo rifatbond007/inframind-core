@@ -376,3 +376,11 @@ async def test_restarted_collector_does_not_republish() -> None:
         await redis.xlen(stream_keys.SIGNALS),
         await redis.xlen(stream_keys.GRAPH_UPDATES),
     ) == before
+
+
+def test_secrets_in_a_span_status_description_are_redacted() -> None:
+    trace = tr(sp("a", "p1", error=True, desc="auth failed token=abc123 for a@b.com"))
+    [sig] = out(trace).errors
+    assert "abc123" not in sig.model_dump_json()
+    assert "a@b.com" not in sig.model_dump_json()
+    assert sig.attrs["status_description"].startswith("auth failed")

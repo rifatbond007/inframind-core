@@ -285,3 +285,27 @@ async def test_restarted_collector_does_not_republish() -> None:
     assert len(await stream_signals(redis)) == 1
     restart_start = int(loki.requests[-1].url.params["start"])
     assert restart_start == NOW_NS - 5_000_000_000 - 10 * 1_000_000_000
+
+
+def test_secrets_and_pii_never_reach_the_signal() -> None:
+    line = jline(
+        severity="error",
+        message="login failed password=hunter2 for a@b.com from 10.1.2.3",
+        error="rpc error: code = Unauthenticated desc = bad token: abc123",
+    )
+    sig = entry_to_signal(LABELS, str(NOW_NS), line, ingested_at=NOW)
+    assert sig is not None
+    dumped = sig.model_dump_json()
+    for leaked in ("hunter2", "a@b.com", "10.1.2.3", "abc123"):
+        assert leaked not in dumped
+    assert sig.attrs["grpc_code"] == "Unauthenticated"
+    assert "code = Unauthenticated" in sig.attrs["message"]
+
+
+def test_a_secret_straddling_the_truncation_boundary_is_still_redacted() -> None:
+    line = "ERROR " + "x" * 470 + " password=hunter2supersecret"
+    assert "hunter2" in line[:500], "premise: a plain cut at 500 chars would leak the secret"
+    sig = entry_to_signal(LABELS, str(NOW_NS), line, ingested_at=NOW)
+    assert sig is not None
+    assert "hunter2" not in sig.model_dump_json()
+    assert len(sig.attrs["message"]) <= 500

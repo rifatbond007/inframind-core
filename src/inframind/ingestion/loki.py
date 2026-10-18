@@ -27,6 +27,7 @@ from inframind.common.bus import publish
 from inframind.common.collector_state import CollectorState, MemoryState, State
 from inframind.common.exceptions import BusError
 from inframind.common.logging import get_logger
+from inframind.common.redact import redact
 from inframind.common.signal import (
     Severity,
     Signal,
@@ -110,7 +111,7 @@ def classify_line(line: str) -> ParsedLine:
     trace = _TRACE_IN_TEXT.search(line)
     return ParsedLine(
         level=_text_level(line),
-        message=stripped[:MAX_MESSAGE_CHARS],
+        message=redact(stripped)[:MAX_MESSAGE_CHARS],
         trace_id=trace.group(0) if trace else None,
         grpc_code=_grpc_code(line),
     )
@@ -126,7 +127,7 @@ def _classify_json(fields: dict[str, Any]) -> ParsedLine:
     detail = _first(fields, _ERROR_KEYS)
     if detail:  # the failing callee and gRPC code usually live here, not in `message`
         message = f"{message}: {detail}" if message else str(detail)
-    message = message[:MAX_MESSAGE_CHARS]
+    message = redact(message)[:MAX_MESSAGE_CHARS]
     raw_level = _first(fields, _LEVEL_KEYS)
     # An explicit level always wins: a debug/info line mentioning "error" is not a problem.
     level = _LEVELS.get(str(raw_level).lower()) if raw_level is not None else _text_level(message)

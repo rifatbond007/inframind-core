@@ -35,6 +35,7 @@ from inframind.common.collector_state import CollectorState, MemoryState, State
 from inframind.common.exceptions import BusError
 from inframind.common.graph_update import GraphUpdate
 from inframind.common.logging import get_logger
+from inframind.common.redact import redact
 from inframind.common.signal import Severity, Signal, SignalType, Source
 from inframind.common.time import utcnow
 from inframind.ingestion.runner import run_collector
@@ -130,7 +131,7 @@ def trace_to_outputs(trace: dict[str, Any], *, ingested_at: datetime) -> TraceOu
             }
             description = tags.get("otel.status_description")
             if description:
-                attrs["status_description"] = str(description)[:MAX_DESCRIPTION_CHARS]
+                attrs["status_description"] = redact(str(description))[:MAX_DESCRIPTION_CHARS]
             out.errors.append(
                 Signal(
                     ts=_us_to_datetime(start_us),
