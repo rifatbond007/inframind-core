@@ -30,6 +30,8 @@ dependencies = [
     "pydantic>=2.6,<3",
     "redis>=5.0",
     "httpx>=0.27",
+    "fastapi>=0.110",
+    "uvicorn>=0.29",
 ]
 
 [project.optional-dependencies]

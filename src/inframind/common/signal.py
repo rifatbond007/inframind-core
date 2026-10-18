@@ -17,6 +17,8 @@ log = get_logger(__name__)
 
 UNKNOWN_SERVICE = "unknown"
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+_DEPLOYMENT_POD = re.compile(r"^(?P<service>.+)-[a-z0-9]{6,10}-[a-z0-9]{5}$")
+_STATEFULSET_POD = re.compile(r"^(?P<service>.+)-\d+$")
 
 
 class Source(StrEnum):
@@ -50,6 +52,15 @@ def normalise_service(name: str) -> str:
     """Return the canonical lower-kebab-case service name, or `unknown` if nothing is left."""
     cleaned = re.sub(r"[^a-z0-9-]", "-", name.strip().lower()).strip("-")
     return cleaned or UNKNOWN_SERVICE
+
+
+def service_from_pod(pod: str) -> str:
+    """Return the canonical service name for a pod (strips ReplicaSet/StatefulSet suffixes)."""
+    for pattern in (_DEPLOYMENT_POD, _STATEFULSET_POD):
+        match = pattern.match(pod)
+        if match:
+            return normalise_service(match["service"])
+    return normalise_service(pod)
 
 
 class Signal(BaseModel):

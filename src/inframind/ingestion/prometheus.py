@@ -12,7 +12,6 @@ import contextlib
 import logging
 import math
 import os
-import re
 import signal as os_signal
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -26,13 +25,11 @@ from inframind.common import stream_keys
 from inframind.common.bus import publish
 from inframind.common.exceptions import BusError
 from inframind.common.logging import configure_logging, get_logger
-from inframind.common.signal import Severity, Signal, SignalType, Source, normalise_service
+from inframind.common.signal import Severity, Signal, SignalType, Source, service_from_pod
 from inframind.common.time import utcnow
 
 log = get_logger(__name__)
 
-_DEPLOYMENT_POD = re.compile(r"^(?P<service>.+)-[a-z0-9]{6,10}-[a-z0-9]{5}$")
-_STATEFULSET_POD = re.compile(r"^(?P<service>.+)-\d+$")
 _NAMESPACE = "default"
 
 
@@ -60,15 +57,6 @@ DEFAULT_QUERIES: tuple[MetricQuery, ...] = (
         f'sum by (namespace, pod) (kube_pod_container_status_restarts_total{{namespace="{_NAMESPACE}"}})',
     ),
 )
-
-
-def service_from_pod(pod: str) -> str:
-    """Return the canonical service name for a pod (strips ReplicaSet/StatefulSet suffixes)."""
-    for pattern in (_DEPLOYMENT_POD, _STATEFULSET_POD):
-        match = pattern.match(pod)
-        if match:
-            return normalise_service(match["service"])
-    return normalise_service(pod)
 
 
 def row_to_signal(name: str, row: dict[str, Any], *, ingested_at: datetime) -> Signal | None:
