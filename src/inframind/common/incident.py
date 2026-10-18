@@ -7,6 +7,7 @@ RCA outputs (candidates, summary, alerts) are added downstream; they are not on 
 
 from __future__ import annotations
 
+import re
 from datetime import UTC, datetime
 from typing import Any, Literal
 
@@ -18,6 +19,7 @@ from .signal import UNKNOWN_SERVICE, Severity, normalise_service
 
 IncidentState = Literal["open", "acknowledged", "resolved", "expired"]
 _CLOSED_STATES = ("resolved", "expired")
+_FINGERPRINT = re.compile(r"^[0-9a-f]{8,64}$")
 
 
 class Incident(BaseModel):
@@ -36,6 +38,14 @@ class Incident(BaseModel):
     signals: list[str] = Field(default_factory=list)
     anomalies: list[Anomaly] = Field(default_factory=list)
     severity: Severity
+    fingerprint: str
+
+    @field_validator("fingerprint")
+    @classmethod
+    def _fingerprint_is_lowercase_hex(cls, v: str) -> str:
+        if not _FINGERPRINT.match(v):
+            raise ValueError("fingerprint must be 8 to 64 lower-case hex characters")
+        return v
 
     @field_validator("opened_at", "updated_at", "closed_at", mode="before")
     @classmethod

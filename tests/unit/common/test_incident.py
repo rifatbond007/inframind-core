@@ -38,6 +38,7 @@ def make(**over: Any) -> Incident:
         "signals": ["01SIG"],
         "anomalies": [anomaly(), anomaly("cartservice")],
         "severity": Severity.WARNING,
+        "fingerprint": "a1b2c3d4e5f60718",
     }
     fields.update(over)
     return Incident(**fields)
@@ -88,3 +89,20 @@ def test_services_are_sorted_deduplicated_and_canonical() -> None:
 
 def test_id_is_a_ulid() -> None:
     assert len(make().id) == 26
+
+
+def test_fingerprint_round_trips() -> None:
+    assert Incident.model_validate_json(make().model_dump_json()).fingerprint == "a1b2c3d4e5f60718"
+
+
+@pytest.mark.parametrize("bad", ["", "abc1234", "A1B2C3D4E5F60718", "g1b2c3d4e5f60718", "a" * 65])
+def test_a_malformed_fingerprint_is_rejected(bad: str) -> None:
+    with pytest.raises(ValidationError):
+        make(fingerprint=bad)
+
+
+def test_a_missing_fingerprint_is_rejected() -> None:
+    fields = make().model_dump()
+    del fields["fingerprint"]
+    with pytest.raises(ValidationError):
+        Incident(**fields)

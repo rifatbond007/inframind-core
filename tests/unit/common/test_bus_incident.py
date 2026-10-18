@@ -30,6 +30,7 @@ def incident() -> Incident:
         signals=["01SIG"],
         anomalies=[],
         severity=Severity.WARNING,
+        fingerprint="0123456789abcdef",
     )
 
 

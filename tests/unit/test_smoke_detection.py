@@ -61,6 +61,7 @@ def incident(
         signals=[],
         anomalies=anomalies or [],
         severity=Severity.CRITICAL,
+        fingerprint="0123456789abcdef",
     )
 
 

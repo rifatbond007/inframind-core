@@ -13,6 +13,7 @@ from inframind.detection.config import (
     cooldown_s,
     freeze_window_s,
     load_params,
+    load_prefixed,
     profile_for,
 )
 
@@ -77,3 +78,8 @@ def test_freeze_window_and_cooldown_defaults_and_overrides() -> None:
     assert cooldown_s({"INFRAMIND_CORRELATION_COOLDOWN_S": "45"}) == 45.0
     with pytest.raises(ValueError, match="BASELINE_FREEZE_WINDOW"):
         freeze_window_s({"BASELINE_FREEZE_WINDOW": "soon"})
+
+
+def test_load_prefixed_is_the_generic_loader() -> None:
+    params = load_prefixed(ZScoreParams, "MY_PREFIX", {"MY_PREFIX_THRESHOLD": "2.5"})
+    assert params == ZScoreParams(window=60, threshold=2.5, min_samples=10)

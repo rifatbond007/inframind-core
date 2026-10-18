@@ -19,6 +19,8 @@ from inframind.common.incident import Incident, IncidentState
 from inframind.common.signal import Severity
 from inframind.detection.freeze import BaselineFreezeCoordinator
 
+from .fingerprint import fingerprint
+
 _RANK = {Severity.INFO: 0, Severity.WARNING: 1, Severity.CRITICAL: 2}
 
 
@@ -30,6 +32,7 @@ class _Record:
     opened_at: datetime
     last_anomaly_ts: datetime
     severity: Severity
+    fingerprint: str = ""
     revision: int = 0
     anomalies: list[Anomaly] = field(default_factory=list)
     signals: list[str] = field(default_factory=list)
@@ -71,6 +74,7 @@ class IncidentTracker:
                 opened_at=anomaly.ts,
                 last_anomaly_ts=anomaly.ts,
                 severity=anomaly.severity,
+                fingerprint=fingerprint(anomaly.service, anomaly.ts, 300.0),
             )
             self._open[anomaly.service] = record
         record.anomalies = self._retain([*record.anomalies, anomaly])
@@ -125,6 +129,7 @@ class IncidentTracker:
             signals=list(record.signals),
             anomalies=list(record.anomalies),
             severity=record.severity,
+            fingerprint=record.fingerprint,
         )
         record.id = incident.id
         return incident
