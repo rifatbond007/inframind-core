@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import time
+
 import pytest
 
 from inframind.common.redact import redact, redact_mapping
@@ -66,3 +68,29 @@ def test_redact_mapping_redacts_string_values_only() -> None:
         "nested": {"note": "token=[REDACTED:secret]"},
     }
     assert values["description"].startswith("login for a@b.com")  # input is not mutated
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "A" * 30_000,  # one long token, e.g. a base64 blob
+        "eyJ" * 10_000,
+        "a@" * 15_000,
+        "1." * 15_000,
+        "token=" * 5_000,
+        "a." * 15_000,
+    ],
+    ids=[
+        "word-run",
+        "repeated-jwt-prefix",
+        "repeated-at",
+        "dotted-digits",
+        "repeated-key",
+        "dotted-word",
+    ],
+)
+def test_redaction_stays_fast_on_pathological_lines(text: str) -> None:
+    """A single huge log line must not stall a collector (redaction runs before truncation)."""
+    started = time.perf_counter()
+    redact(text)
+    assert time.perf_counter() - started < 1.0
