@@ -107,8 +107,10 @@ Metric profiles: `cpu_cores` abs 0.005 / rel 0.10; `memory_working_set_bytes` ab
 4.0); unknown metrics rel 0.10, abs 0. `score` is the signed z.
 
 **EWMA** (`ewma.py`, metrics). `alpha=0.3`, `sigma_k=3`, `min_samples=10`, same floors. Exponentially
-weighted mean and variance; fire when `|x - mean| > sigma_k * max(sqrt(var), floors)`. Catches
-slow ramps the windowed Z-score absorbs. `score` is the residual in sigmas.
+weighted mean and variance; fire when `|x - mean| > sigma_k * max(sqrt(var), floors)`. It has
+no window edge and follows recent level shifts, so it complements the Z-score (a deviation that
+has aged out of, or is hidden inside, the 60-sample window); with `alpha=0.3` its memory is about
+three samples, so it is *not* a slow-ramp detector. `score` is the residual in sigmas.
 
 **Error-rate spike** (`error_spike.py`). Counts *error events* per service in a sliding window of
 `window_s=300`: Loki `LOG` signals (already filtered to warning/error) and Jaeger error spans
