@@ -63,6 +63,7 @@ Task 1 of the plan writes them into the standards and the decision log.
 | 10 | "Error *rate*" detector, but collectors publish only warning/error lines, no totals | **Count-based** spike detector over a sliding window; documented limitation | `ingestion/loki.py` drops non-problem lines by design |
 | 11 | Env scheme: std 05 `INFRAMIND_DETECTION_<DETECTOR>_<PARAM>`; surface-map `BASELINE_FREEZE_WINDOW`, `DETECTION_CONCURRENCY` | Detector params use the first scheme; freeze lease uses the existing `BASELINE_FREEZE_WINDOW`; `DETECTION_CONCURRENCY` is not implemented (one worker, YAGNI) | both are documented keys |
 | 12 | Time source unspecified | Signal `ts` (observation time) drives windows, decay and cooldown; wall clock is used only to resolve incidents when the stream is idle | D6 reproducibility |
+| 13 | Standard 05's Z-score is two-sided (`abs(z)`) | Resource gauges (`cpu_cores`, `memory_working_set_bytes`) and counters alert **upward only**; unprofiled metrics stay two-sided. Found while replaying the 6244 recorded signals through the worker: all 6 metric anomalies were CPU *drops* to ~0 from a ~0.02 mean (traffic stopping between experiments), none upward; 0 after the change. | recorded history replay |
 
 ## Architecture
 

@@ -18,13 +18,15 @@ from inframind.detection.config import (
 
 
 def test_known_metric_profiles() -> None:
-    assert profile_for("cpu_cores") == MetricProfile(0.005, 0.10)
-    assert profile_for("memory_working_set_bytes") == MetricProfile(8 * 2**20, 0.05)
-    assert profile_for("container_restarts_total") == MetricProfile(0.25, 0.0, counter=True)
+    assert profile_for("cpu_cores") == MetricProfile(0.005, 0.10, direction="up")
+    assert profile_for("memory_working_set_bytes") == MetricProfile(8 * 2**20, 0.05, direction="up")
+    assert profile_for("container_restarts_total") == MetricProfile(
+        0.25, 0.0, counter=True, direction="up"
+    )
 
 
-def test_unknown_metric_gets_a_relative_floor_only() -> None:
-    assert profile_for("something_new") == MetricProfile(0.0, 0.10)
+def test_unknown_metric_gets_a_relative_floor_only_and_both_directions() -> None:
+    assert profile_for("something_new") == MetricProfile(0.0, 0.10, direction="both")
 
 
 def test_defaults_match_the_design() -> None:

@@ -93,3 +93,19 @@ def test_frozen_series_keeps_scoring_but_does_not_learn() -> None:
 def test_it_is_not_a_slow_ramp_detector() -> None:
     ramp = [0.012 + 0.0015 * k for k in range(26)]  # 0.012 -> 0.0495
     assert fired(feed(EwmaDetector(), alternating(20) + ramp)) == []
+
+
+def test_a_drop_in_a_resource_gauge_is_not_an_anomaly() -> None:
+    """A service going idle (traffic stopped) is not a fault; resource gauges alert upward only."""
+    detector = EwmaDetector()
+    busy = alternating(20, 0.10, 0.14)
+    assert fired(feed(detector, [*busy, 0.0, 0.0, 0.0])) == []
+    memory = alternating(20, 60e6, 64e6)
+    assert fired(feed(detector, [*memory, 5e6], metric="memory_working_set_bytes")) == []
+
+
+def test_an_unknown_metric_fires_in_both_directions() -> None:
+    detector = EwmaDetector()
+    feed(detector, alternating(20, 100.0, 104.0), metric="queue_depth")
+    drop = detector.update(metric_signal(0.0, 20, metric="queue_depth"))
+    assert drop is not None and drop.score < 0

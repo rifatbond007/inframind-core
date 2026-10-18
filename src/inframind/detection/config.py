@@ -12,24 +12,32 @@ import dataclasses
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TypeVar, get_type_hints
+from typing import Literal, TypeVar, get_type_hints
 
 T = TypeVar("T")
 
 
 @dataclass(frozen=True)
 class MetricProfile:
-    """Noise floors for one metric so a flat series cannot make a tiny wiggle look huge."""
+    """Noise floors for one metric so a flat series cannot make a tiny wiggle look huge.
+
+    `direction` says which deviations are anomalies: `"up"` for resource gauges and counters,
+    where a drop means the service went idle (traffic stopped) and is not a fault; `"both"` for
+    metrics nobody has profiled yet.
+    """
 
     abs_floor: float
     rel_floor: float
     counter: bool = False
+    direction: Literal["up", "both"] = "both"
 
 
 _PROFILES: dict[str, MetricProfile] = {
-    "cpu_cores": MetricProfile(abs_floor=0.005, rel_floor=0.10),
-    "memory_working_set_bytes": MetricProfile(abs_floor=8 * 2**20, rel_floor=0.05),
-    "container_restarts_total": MetricProfile(abs_floor=0.25, rel_floor=0.0, counter=True),
+    "cpu_cores": MetricProfile(abs_floor=0.005, rel_floor=0.10, direction="up"),
+    "memory_working_set_bytes": MetricProfile(abs_floor=8 * 2**20, rel_floor=0.05, direction="up"),
+    "container_restarts_total": MetricProfile(
+        abs_floor=0.25, rel_floor=0.0, counter=True, direction="up"
+    ),
 }
 _DEFAULT_PROFILE = MetricProfile(abs_floor=0.0, rel_floor=0.10)
 

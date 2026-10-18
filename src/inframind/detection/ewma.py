@@ -73,7 +73,7 @@ class EwmaDetector:
         std = effective_std(math.sqrt(state.var), state.mean, profile)
         residual = value - state.mean
         score = residual / std
-        if abs(score) <= self._params.sigma_k:
+        if abs(score) <= self._params.sigma_k or (profile.direction == "up" and score < 0):
             return None
         critical = profile.counter or abs(score) >= 1.5 * self._params.sigma_k
         return Anomaly(

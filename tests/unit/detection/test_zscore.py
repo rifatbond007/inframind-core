@@ -141,3 +141,19 @@ def test_freezing_one_service_leaves_others_learning() -> None:
     detector.freeze("frontend", at(20))
     other = feed(detector, [0.2] * 3, service="cartservice", start=20)
     assert other[-1] is not None and other[-1].attrs["frozen"] is False
+
+
+def test_a_drop_in_a_resource_gauge_is_not_an_anomaly() -> None:
+    """A service going idle (traffic stopped) is not a fault; resource gauges alert upward only."""
+    detector = ZScoreDetector()
+    busy = alternating(20, 0.10, 0.14)
+    assert fired(feed(detector, [*busy, 0.0, 0.0, 0.0])) == []
+    memory = alternating(20, 60e6, 64e6)
+    assert fired(feed(detector, [*memory, 5e6], metric="memory_working_set_bytes")) == []
+
+
+def test_an_unknown_metric_fires_in_both_directions() -> None:
+    detector = ZScoreDetector()
+    feed(detector, alternating(20, 100.0, 104.0), metric="queue_depth")
+    drop = detector.update(metric_signal(0.0, 20, metric="queue_depth"))
+    assert drop is not None and drop.score < 0

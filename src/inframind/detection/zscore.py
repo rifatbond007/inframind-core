@@ -62,7 +62,7 @@ class ZScoreDetector:
         profile = profile_for(metric)
         divisor = effective_std(std, mean, profile)
         z = (value - mean) / divisor
-        if abs(z) < self._params.threshold:
+        if abs(z) < self._params.threshold or (profile.direction == "up" and z < 0):
             return None
         critical = profile.counter or abs(z) >= 1.5 * self._params.threshold
         return Anomaly(
