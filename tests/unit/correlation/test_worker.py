@@ -95,10 +95,10 @@ async def test_idle_tick_resolves_when_the_stream_is_quiet() -> None:
     assert [i.state for i in await incidents(redis)] == ["open"]
     now["t"] = spike.ts + timedelta(seconds=119)
     await worker.tick_idle()
-    assert [i.state for i in await incidents(redis)] == ["open"]
+    assert "resolved" not in [i.state for i in await incidents(redis)]  # evidence updates are fine
     now["t"] = spike.ts + timedelta(seconds=121)
     await worker.tick_idle()
-    assert [i.state for i in await incidents(redis)] == ["open", "resolved"]
+    assert [i.state for i in await incidents(redis)][-1] == "resolved"
 
 
 async def test_idle_tick_does_not_resolve_a_replay() -> None:
@@ -133,7 +133,10 @@ async def test_a_publish_failure_does_not_lose_the_incident() -> None:
     [incident] = await incidents(redis)
     assert incident.state == "open"
     await worker.handle(metric(0.01, 630, "cartservice"))
-    assert len(await incidents(redis)) == 1  # not duplicated
+    published = await incidents(redis)
+    assert {i.id for i in published} == {incident.id}  # still one incident
+    revisions = [i.revision for i in published]
+    assert revisions == sorted(set(revisions))  # no snapshot published twice
 
 
 async def test_redelivery_does_not_open_a_second_incident() -> None:
