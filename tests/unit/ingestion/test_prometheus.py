@@ -23,7 +23,7 @@ NOW = datetime(2026, 10, 19, 12, 0, 0, tzinfo=UTC)
 T0 = int(NOW.timestamp())
 
 
-def row(pod: str = "frontend-7d9f8c6b5-abcde", values: list[Any] | None = None) -> dict[str, Any]:
+def row(pod: str = "frontend-7d9f8c6b5-jfpxt", values: list[Any] | None = None) -> dict[str, Any]:
     return {
         "metric": {"namespace": "default", "pod": pod},
         "values": values if values is not None else [[T0 - 30, "0.10"], [T0, "0.25"]],
@@ -37,7 +37,7 @@ def prom_ok(rows: list[dict[str, Any]]) -> dict[str, Any]:
 @pytest.mark.parametrize(
     ("pod", "service"),
     [
-        ("frontend-7d9f8c6b5-abcde", "frontend"),
+        ("frontend-7d9f8c6b5-jfpxt", "frontend"),
         ("recommendationservice-5c9d8f7b6d-x2k4p", "recommendationservice"),
         ("redis-cart-78746d49dc-lk9tz", "redis-cart"),
         ("kafka-0", "kafka"),
@@ -59,7 +59,7 @@ def test_row_to_signal_maps_latest_sample() -> None:
     assert sig.ts == datetime.fromtimestamp(T0, tz=UTC)
     assert sig.attrs["metric"] == "cpu_cores"
     assert sig.attrs["value"] == 0.25
-    assert sig.attrs["labels"] == {"namespace": "default", "pod": "frontend-7d9f8c6b5-abcde"}
+    assert sig.attrs["labels"] == {"namespace": "default", "pod": "frontend-7d9f8c6b5-jfpxt"}
     assert sig.attrs["ingested_at"] == NOW.isoformat()
 
 
@@ -107,8 +107,8 @@ async def test_poll_once_publishes_one_signal_per_series() -> None:
     redis = FakeAsyncRedis()
     prom = FakeProm(
         {
-            "q_cpu": prom_ok([row("frontend-7d9f8c6b5-abcde"), row("cartservice-6c8f9d7b5-qwert")]),
-            "q_mem": prom_ok([row("frontend-7d9f8c6b5-abcde", [[T0, "1048576"]])]),
+            "q_cpu": prom_ok([row("frontend-7d9f8c6b5-jfpxt"), row("cartservice-6c8f9d7b5-qwrtz")]),
+            "q_mem": prom_ok([row("frontend-7d9f8c6b5-jfpxt", [[T0, "1048576"]])]),
         }
     )
     published = await make_collector(prom, redis).poll_once()

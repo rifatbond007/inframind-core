@@ -16,6 +16,7 @@ from inframind.common.signal import (
     SignalType,
     Source,
     normalise_service,
+    service_from_pod,
 )
 from inframind.common.time import utcnow
 
@@ -124,3 +125,24 @@ def test_signal_is_immutable() -> None:
 def test_json_round_trip() -> None:
     s = make(severity=Severity.CRITICAL, attrs={"value": 1.5}, trace_id="a" * 32)
     assert Signal.model_validate_json(s.model_dump_json()) == s
+
+
+@pytest.mark.parametrize(
+    ("pod", "service"),
+    [
+        # control-plane static pods: `<component>-<node-name>`, never a ReplicaSet name
+        ("etcd-inframind-control-plane", "etcd-inframind-control-plane"),
+        ("kube-apiserver-inframind-control-plane", "kube-apiserver-inframind-control-plane"),
+        ("kube-scheduler-inframind-worker", "kube-scheduler-inframind-worker"),
+        # DaemonSet pods: `<name>-<5>`, indistinguishable from a service name, so kept whole
+        ("kindnet-ab12c", "kindnet-ab12c"),
+        ("kube-proxy-x7k2m", "kube-proxy-x7k2m"),
+        # ReplicaSet and StatefulSet pods are still reduced to their workload name
+        ("coredns-7db6d8ff4d-5lvfp", "coredns"),
+        ("redis-cart-c4754f644-2l69d", "redis-cart"),
+        ("app-v2-5c744dd6bb-jfpxt", "app-v2"),
+        ("kafka-0", "kafka"),
+    ],
+)
+def test_service_from_pod_strips_only_real_controller_suffixes(pod: str, service: str) -> None:
+    assert service_from_pod(pod) == service

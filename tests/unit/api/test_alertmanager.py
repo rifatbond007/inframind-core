@@ -68,7 +68,7 @@ def test_every_alert_in_the_group_becomes_a_signal() -> None:
 @pytest.mark.parametrize(
     ("labels", "service"),
     [
-        ({"deployment": "checkoutservice", "pod": "x-1234567890-abcde"}, "checkoutservice"),
+        ({"deployment": "checkoutservice", "pod": "x-1234567890-jfpxt"}, "checkoutservice"),
         ({"pod": "adservice-5bc8b4b54b-cq6sn", "job": "kube-state-metrics"}, "adservice"),
         # Real kube-state-metrics labels: the operator-stamped `service` names the exporter.
         (
@@ -109,7 +109,7 @@ def test_resolved_alert_is_info_and_observed_at_ends_at() -> None:
 
 @pytest.mark.parametrize("severity", ["none", "info", "", "page"])
 def test_unrecognised_severity_is_info(severity: str) -> None:
-    labels = {"alertname": "A", "pod": "p-1234567890-abcde", "severity": severity}
+    labels = {"alertname": "A", "pod": "p-1234567890-jfpxt", "severity": severity}
     [sig] = alerts_to_signals(payload(alert(labels=labels)), request_id="r", ingested_at=NOW)
     assert sig.severity is Severity.INFO
 
@@ -301,3 +301,19 @@ async def test_retry_after_partial_publish_repeats_identical_dedup_keys() -> Non
     assert len(keys) == 3  # the first alert was published by both attempts
     assert keys.count(("78da0ef7fc3bc57d", "2026-10-19T11:58:00.123456+00:00", "firing")) == 2
     assert len(set(keys)) == 2  # downstream can dedupe on (fingerprint, starts_at, status)
+
+
+def test_real_etcd_alert_is_attributed_to_the_static_pod_not_a_stripped_name() -> None:
+    etcd = alert(
+        labels={
+            "alertname": "etcdInsufficientMembers",
+            "endpoint": "http-metrics",
+            "job": "kube-etcd",
+            "namespace": "kube-system",
+            "pod": "etcd-inframind-control-plane",
+            "service": "kube-prometheus-stack-kube-etcd",
+            "severity": "critical",
+        }
+    )
+    [sig] = alerts_to_signals(payload(etcd), request_id="r", ingested_at=NOW)
+    assert sig.service == "etcd-inframind-control-plane"

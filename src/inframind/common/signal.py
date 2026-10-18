@@ -17,7 +17,12 @@ log = get_logger(__name__)
 
 UNKNOWN_SERVICE = "unknown"
 _TRACE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
-_DEPLOYMENT_POD = re.compile(r"^(?P<service>.+)-[a-z0-9]{6,10}-[a-z0-9]{5}$")
+# Kubernetes builds the pod-template hash and the 5-character pod suffix from this alphabet
+# (no vowels, no 0/1/3), which is what keeps `...-control-plane` from looking like a ReplicaSet.
+_K8S_NAME_CHARS = "bcdfghjklmnpqrstvwxz2456789"
+_DEPLOYMENT_POD = re.compile(
+    rf"^(?P<service>.+)-[{_K8S_NAME_CHARS}]{{6,10}}-[{_K8S_NAME_CHARS}]{{5}}$"
+)
 _STATEFULSET_POD = re.compile(r"^(?P<service>.+)-\d+$")
 
 
@@ -55,7 +60,12 @@ def normalise_service(name: str) -> str:
 
 
 def service_from_pod(pod: str) -> str:
-    """Return the canonical service name for a pod (strips ReplicaSet/StatefulSet suffixes)."""
+    """Return the canonical service name for a pod.
+
+    Strips ReplicaSet (`-<hash>-<suffix>`) and StatefulSet (`-<ordinal>`) suffixes. DaemonSet
+    pods (`kindnet-ab12c`) and static pods (`etcd-<node-name>`) cannot be told apart from a
+    service name by shape alone, so they are returned whole, normalised.
+    """
     for pattern in (_DEPLOYMENT_POD, _STATEFULSET_POD):
         match = pattern.match(pod)
         if match:
