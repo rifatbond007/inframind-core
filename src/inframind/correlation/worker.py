@@ -27,11 +27,11 @@ from inframind.common.bus import SignalConsumer, publish_incident
 from inframind.common.exceptions import BusError
 from inframind.common.incident import Incident
 from inframind.common.logging import configure_logging, get_logger
-from inframind.common.signal import Signal
+from inframind.common.signal import Signal, Source
 from inframind.common.time import utcnow
-from inframind.detection.config import cooldown_s
 from inframind.detection.engine import DetectionEngine
 
+from .config import load_correlation_params
 from .tracker import IncidentTracker
 
 log = get_logger(__name__)
@@ -78,7 +78,13 @@ class CorrelationWorker:
         return await self._consumer.poll_once(self.handle)
 
     async def handle(self, signal: Signal) -> None:
-        """Detect on one signal, advance the tracker, and publish what is ready."""
+        """Detect on one signal, advance the tracker, and publish what is ready.
+
+        Alertmanager signals are corroboration: they attach to an open incident for their
+        service and never open one (D7 keeps raw alerts as the baseline InfraMind must beat).
+        """
+        if signal.source is Source.ALERTMANAGER:
+            self._tracker.attach_signal(signal)
         for anomaly in self._engine.process(signal):
             self._outbox.extend(self._tracker.on_anomaly(anomaly))
         if self._watermark is None or signal.ts > self._watermark:
@@ -122,7 +128,7 @@ class CorrelationWorker:
 
 
 async def amain() -> None:
-    """Run until SIGINT/SIGTERM. Reads REDIS_URL, INFRAMIND_DETECTION_*, BASELINE_FREEZE_WINDOW."""
+    """Run until SIGINT/SIGTERM. Reads REDIS_URL, INFRAMIND_DETECTION_*, INFRAMIND_CORRELATION_*."""
     configure_logging()
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
@@ -130,7 +136,7 @@ async def amain() -> None:
         loop.add_signal_handler(sig, stop.set)
     redis = Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
     engine = DetectionEngine.default()
-    tracker = IncidentTracker(engine.coordinator, cooldown_s=cooldown_s())
+    tracker = IncidentTracker(engine.coordinator, load_correlation_params())
     try:
         await CorrelationWorker(redis, engine, tracker).run(stop)
     finally:

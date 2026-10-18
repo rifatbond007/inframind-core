@@ -160,3 +160,59 @@ async def test_a_worker_started_at_the_tail_ignores_the_backlog() -> None:
     await worker.ensure_group()
     assert await worker.poll_once() == 0
     assert await incidents(redis) == []
+
+
+def alert(service: str, signal_id: str, seconds: float = 605) -> Signal:
+    return Signal(
+        id=signal_id,
+        ts=metric(0, seconds).ts,
+        source=Source.ALERTMANAGER,
+        type=SignalType.ALERT,
+        service=service,
+        attrs={"alertname": "KubePodCrashLooping"},
+    )
+
+
+async def test_an_alert_for_an_open_incident_is_attached() -> None:
+    redis = FakeAsyncRedis()
+    worker = make(redis)
+    await run(
+        redis,
+        worker,
+        [
+            *warm(),
+            metric(0.2, 600),
+            alert("frontend", "alert-1"),
+            metric(0.01, 600 + 130, "cartservice"),
+        ],
+    )
+    published = await incidents(redis)
+    assert published[-1].state == "resolved"
+    assert "alert-1" in published[-1].signals
+
+
+async def test_an_alert_alone_opens_nothing() -> None:
+    redis = FakeAsyncRedis()
+    worker = make(redis)
+    await run(redis, worker, [alert("frontend", "alert-1", 0), alert("cartservice", "alert-2", 5)])
+    assert await incidents(redis) == []
+
+
+async def test_one_burst_across_services_publishes_one_incident() -> None:
+    services = [
+        "adservice",
+        "cartservice",
+        "currencyservice",
+        "frontend",
+        "productcatalogservice",
+        "recommendationservice",
+    ]
+    redis = FakeAsyncRedis()
+    worker = make(redis)
+    signals = [s for svc in services for s in warm(svc)]
+    signals += [metric(0.2, 600 + 5 * k, svc) for k, svc in enumerate(services)]
+    await run(redis, worker, signals)
+    published = await incidents(redis)
+    assert len({i.id for i in published}) == 1
+    assert published[-1].services == services
+    assert len({i.fingerprint for i in published}) == 1
