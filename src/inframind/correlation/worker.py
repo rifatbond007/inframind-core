@@ -51,6 +51,7 @@ class CorrelationWorker:
         idle_tick_s: float = 5.0,
         live_window_s: float = 600.0,
         block_ms: int = 1000,
+        start_id: str = "0",
         clock: Callable[[], datetime] = utcnow,
         in_stream: str = stream_keys.SIGNALS,
         out_stream: str = stream_keys.INCIDENTS,
@@ -62,7 +63,9 @@ class CorrelationWorker:
         self._live_window_s = live_window_s
         self._clock = clock
         self._out_stream = out_stream
-        self._consumer = SignalConsumer(redis, group, consumer, stream=in_stream, block_ms=block_ms)
+        self._consumer = SignalConsumer(
+            redis, group, consumer, stream=in_stream, block_ms=block_ms, start_id=start_id
+        )
         self._outbox: list[Incident] = []
         self._watermark: datetime | None = None
 

@@ -118,6 +118,7 @@ class SignalConsumer:
         block_ms: int = 1000,
         reclaim_idle_ms: int = 30_000,
         dedup_ttl_s: int = DEFAULT_DEDUP_TTL_S,
+        start_id: str = "0",
     ) -> None:
         self._client = client
         self._group = group
@@ -127,14 +128,17 @@ class SignalConsumer:
         self._block_ms = block_ms
         self._reclaim_idle_ms = reclaim_idle_ms
         self._dedup_ttl_s = dedup_ttl_s
+        self._start_id = start_id
 
     def _dedup_key(self, signal_id: str) -> str:
         return f"dedup:{self._stream}:{self._group}:{signal_id}"
 
     async def ensure_group(self) -> None:
-        """Create the consumer group (and the stream) if absent. Safe to call repeatedly."""
+        """Create the group (and the stream) if absent, at `start_id` (`"$"` = new entries only)."""
         try:
-            await self._client.xgroup_create(self._stream, self._group, id="0", mkstream=True)
+            await self._client.xgroup_create(
+                self._stream, self._group, id=self._start_id, mkstream=True
+            )
         except redis_exc.ResponseError as e:
             if "BUSYGROUP" not in str(e):
                 raise BusError(f"cannot create group {self._group}: {e}") from e

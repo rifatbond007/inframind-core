@@ -102,6 +102,20 @@ deleted or re-applied.
 `unable to flush ip sets`, the fault never happens, and deleting it hangs because it cannot be
 recovered; the script refuses to start in that case and says how to fix it.
 
+### P4 detection gate
+
+`make smoke-detection` runs `testbed/smoke_detection.py` (about 7 minutes: the detectors need real
+warm-up and cAdvisor refreshes every 30 s). It runs the three collectors and the correlation worker
+(in-process, on a throwaway consumer group at the stream tail, writing to its own incidents stream),
+warms the baselines on a trickle of traffic, then hits the frontend with 40 parallel clients:
+
+| Check | Pass condition |
+|---|---|
+| `quiet` | no incident opens during the quiet minute before the burst |
+| `detected` | an incident for `frontend` opens within 60 s of the burst starting (the proposal's MTTD) |
+| `frozen` | the incident's later anomalies were all scored against one constant, frozen baseline (D4) |
+| `resolved` | the incident resolves within the cooldown plus 150 s after the burst ends |
+
 ### P3 ingestion gate
 
 `make smoke-ingestion` runs `testbed/smoke_ingestion.py` against the live testbed. It starts the

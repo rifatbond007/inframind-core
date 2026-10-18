@@ -252,6 +252,10 @@ chaos-delete: ## delete the 5 chaos CRs (but keep chaos-mesh installed)
 observe-fault: ## watch the ingestion paths during one chaos fault: make observe-fault [CHAOS_CR=testbed/chaos/<file>.yaml]
 	PY=$(PY) bash testbed/observe_fault.sh $(CHAOS_CR)
 
+.PHONY: smoke-detection
+smoke-detection: ## verify the P4 gate live: a burst becomes one incident, baselines freeze, it resolves (~7 min, needs `make up`)
+	$(PY) testbed/smoke_detection.py
+
 .PHONY: smoke-ingestion
 smoke-ingestion: ## verify the P3 gate live: API + 3 collectors + a real alert (needs `make up`, port 8080 free)
 	$(PY) testbed/smoke_ingestion.py

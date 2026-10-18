@@ -145,3 +145,15 @@ async def test_redelivery_does_not_open_a_second_incident() -> None:
     await worker.handle(spike)
     await worker.handle(spike)
     assert len(await incidents(redis)) == 1
+
+
+async def test_a_worker_started_at_the_tail_ignores_the_backlog() -> None:
+    redis = FakeAsyncRedis()
+    for sig in [*warm(), metric(0.2, 600)]:
+        await publish(redis, sig)
+    engine = DetectionEngine.default({})
+    tracker = IncidentTracker(engine.coordinator, cooldown_s=120.0)
+    worker = CorrelationWorker(redis, engine, tracker, block_ms=10, start_id="$")
+    await worker.ensure_group()
+    assert await worker.poll_once() == 0
+    assert await incidents(redis) == []

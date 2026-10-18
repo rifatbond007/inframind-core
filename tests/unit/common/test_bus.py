@@ -151,3 +151,27 @@ async def test_publish_wraps_redis_errors() -> None:
     with pytest.raises(BusError):
         await publish(dead, sig())
     await dead.aclose()
+
+
+async def test_a_group_started_at_the_tail_ignores_existing_entries(redis: FakeAsyncRedis) -> None:
+    for _ in range(3):
+        await publish(redis, sig())
+    tail = SignalConsumer(redis, "tail", "c1", block_ms=10, start_id="$")
+    await tail.ensure_group()
+    seen: list[Signal] = []
+
+    async def handler(s: Signal) -> None:
+        seen.append(s)
+
+    assert await tail.poll_once(handler) == 0
+    fresh = sig()
+    await publish(redis, fresh)
+    assert await tail.poll_once(handler) == 1
+    assert seen == [fresh]
+
+
+async def test_a_default_group_still_reads_from_the_beginning(redis: FakeAsyncRedis) -> None:
+    await publish(redis, sig())
+    head = SignalConsumer(redis, "head", "c1", block_ms=10)
+    await head.ensure_group()
+    assert await head.poll_once(lambda s: asyncio.sleep(0)) == 1
