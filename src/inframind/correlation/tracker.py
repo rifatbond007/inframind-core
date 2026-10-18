@@ -5,7 +5,7 @@ One open incident per service. The first anomaly opens it and freezes the servic
 without an anomaly (measured on signal time, so replays match live runs) it resolves and the
 baselines are released. Snapshots are published on open, on a severity increase, and on resolve;
 other updates are folded into the in-memory record and appear in the next snapshot. `revision`
-counts publishes. The interface (`on_anomaly`, `tick`) is what P4b keeps.
+counts publishes. The interface (`on_anomaly`, `tick`) is what P4b keeps. Retained anomalies are capped per detector, then overall.
 """
 
 from __future__ import annotations
@@ -44,11 +44,13 @@ class IncidentTracker:
         *,
         cooldown_s: float = 120.0,
         max_anomalies: int = 50,
+        max_per_detector: int = 10,
         max_signals: int = 200,
     ) -> None:
         self._coordinator = coordinator
         self._cooldown_s = cooldown_s
         self._max_anomalies = max_anomalies
+        self._max_per_detector = max_per_detector
         self._max_signals = max_signals
         self._open: dict[str, _Record] = {}
 
@@ -71,7 +73,7 @@ class IncidentTracker:
                 severity=anomaly.severity,
             )
             self._open[anomaly.service] = record
-        record.anomalies = [*record.anomalies, anomaly][-self._max_anomalies :]
+        record.anomalies = self._retain([*record.anomalies, anomaly])
         record.signals = [*record.signals, anomaly.signal_id][-self._max_signals :]
         record.last_anomaly_ts = max(record.last_anomaly_ts, anomaly.ts)
         self._coordinator.freeze(anomaly.service, anomaly.ts)
@@ -93,6 +95,21 @@ class IncidentTracker:
             del self._open[service]
             self._coordinator.unfreeze(service)
         return resolved
+
+    def _retain(self, anomalies: list[Anomaly]) -> list[Anomaly]:
+        """Keep the newest `max_per_detector` of each detector, at most `max_anomalies` overall.
+
+        One noisy detector (a burst can fire an error-spike anomaly per error event) must not
+        evict the evidence the others gave, so the cap is per detector first.
+        """
+        seen: dict[str, int] = {}
+        kept: list[Anomaly] = []
+        for anomaly in reversed(anomalies):
+            seen[anomaly.detector] = seen.get(anomaly.detector, 0) + 1
+            if seen[anomaly.detector] <= self._max_per_detector:
+                kept.append(anomaly)
+        kept.reverse()
+        return kept[-self._max_anomalies :]
 
     def _snapshot(self, record: _Record, *, state: IncidentState, at: datetime) -> Incident:
         record.revision += 1

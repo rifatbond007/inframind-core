@@ -77,7 +77,8 @@ async def test_live_poll_publishes_well_formed_updates_and_signals(
         signals = [
             Signal.model_validate_json(f[b"data"]) for _, f in await redis.xrange(signals_stream)
         ]
-        update_keys = [(u.caller, u.callee, u.observed_at) for u in updates]
+        # microsecond starts can collide across concurrent requests, a start plus exact latency cannot
+        update_keys = [(u.caller, u.callee, u.observed_at, u.latency_ms) for u in updates]
         error_spans = [s.attrs["span_id"] for s in signals if "span_id" in s.attrs]
         assert len(update_keys) == len(set(update_keys))
         assert len(error_spans) == len(set(error_spans))

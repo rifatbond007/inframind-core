@@ -152,3 +152,26 @@ def test_out_of_order_anomalies_do_not_move_the_quiet_clock_backwards() -> None:
     tracker.on_anomaly(anomaly(40))  # a late delivery
     assert tracker.tick(s(100 + 119)) == []
     assert len(tracker.tick(s(100 + 120))) == 1
+
+
+def test_a_flood_from_one_detector_does_not_evict_the_evidence_of_the_others() -> None:
+    """A burst of 900 error events must not push the metric anomaly that opened the incident out."""
+    tracker, _, _ = make(cooldown_s=120.0)
+    tracker.on_anomaly(anomaly(0, detector="zscore"))
+    for k in range(1, 900):
+        tracker.on_anomaly(anomaly(k, detector="error_spike"))
+    tracker.on_anomaly(anomaly(901, detector="ewma"))
+    [resolved] = tracker.tick(s(901 + 120))
+    kept = [a.detector for a in resolved.anomalies]
+    assert kept.count("zscore") == 1 and kept.count("ewma") == 1
+    assert kept.count("error_spike") == 10  # the newest ten of the flood
+    assert len(kept) == 12
+    assert [a.ts for a in resolved.anomalies] == sorted(a.ts for a in resolved.anomalies)
+
+
+def test_the_per_detector_cap_is_configurable() -> None:
+    tracker, _, _ = make(cooldown_s=60.0, max_per_detector=2)
+    for k in range(6):
+        tracker.on_anomaly(anomaly(k * 10, detector="error_spike"))
+    [resolved] = tracker.tick(s(50 + 60))
+    assert [a.ts for a in resolved.anomalies] == [s(40), s(50)]

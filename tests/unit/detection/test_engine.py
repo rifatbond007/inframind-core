@@ -142,3 +142,29 @@ def test_wall_clock_is_not_used_so_old_signals_behave_like_new_ones() -> None:
     for i, value in enumerate(alternating(20)):
         engine.process(old(value, i))
     assert "zscore" in names(engine.process(old(0.2, 20)))
+
+
+def test_malformed_signals_never_raise_and_never_fire() -> None:
+    """A detector that raises would leave the bus entry pending and redelivered forever."""
+    engine = DetectionEngine.default({})
+    bad_attrs = [
+        {},
+        {"metric": "cpu_cores"},
+        {"metric": "cpu_cores", "value": None},
+        {"metric": "cpu_cores", "value": "0.2"},
+        {"metric": "cpu_cores", "value": True},
+        {"metric": 5, "value": 1.0},
+        {"metric": "span_latency", "p95_ms": "fast", "span_count": 40},
+        {"metric": "span_latency", "p95_ms": 12.0, "span_count": None},
+        {"metric": "span_latency", "p95_ms": -5.0, "span_count": 40},
+        {"metric": "span_latency", "span_count": 40},
+        {"span_id": 7},
+    ]
+    for i, attrs in enumerate(bad_attrs):
+        for source, kind in (
+            (Source.PROMETHEUS, SignalType.METRIC),
+            (Source.JAEGER, SignalType.TRACE),
+            (Source.LOKI, SignalType.LOG),
+        ):
+            signal = Signal(ts=at(i), source=source, type=kind, service="frontend", attrs=attrs)
+            assert isinstance(engine.process(signal), list)
