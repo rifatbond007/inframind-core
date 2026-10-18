@@ -87,6 +87,21 @@ the pod-kill chaos assertion from the P1 → P2 phase gate:
 | 5 | Jaeger UI `/` | HTML page loads |
 | 6 | Re-create `testbed/chaos/pod-kill.yaml`, wait up to 90s | Prometheus shows a **newer** `kube_pod_created` for the frontend (pod-kill replaces the pod, so the restart counter never moves) **and** Loki has logs from the killed pod and its replacement (Alloy ships pod logs) **and** Jaeger has `frontend` traces (smoke sends a few requests through a port-forward, because the load generator is scaled to 0) |
 
+### Watching a fault: `make observe-fault`
+
+`make observe-fault [CHAOS_CR=testbed/chaos/<file>.yaml]` starts the API and the three collectors,
+drives steady frontend traffic, injects one fault, and prints a per-30-second timeline (graph-edge
+latency, span p95, CPU, errors, alerts) with the fault window marked. Output is kept under
+`testbed/.observe/<run-id>/` (git-ignored). It applies a **copy** of the CR with a unique name and
+a `duration` equal to the fault window, so the fault ends by itself and the repo's CR is never
+deleted or re-applied.
+
+`NetworkChaos` (`network-delay.yaml`) needs host kernel modules that are not loaded by default:
+`sudo modprobe sch_netem ip_set_hash_ipport ip_set_hash_net`, persisted with
+`/etc/modules-load.d/inframind-chaos.conf`. Without them Chaos Mesh reports
+`unable to flush ip sets`, the fault never happens, and deleting it hangs because it cannot be
+recovered; the script refuses to start in that case and says how to fix it.
+
 ### P3 ingestion gate
 
 `make smoke-ingestion` runs `testbed/smoke_ingestion.py` against the live testbed. It starts the
@@ -149,6 +164,7 @@ landed on `dev-rifat`; rows from those slices apply today.**
 | [S4] `chaos-mesh` | `oom-kill` CR fires but the wrong container is killed | The CR targets `app=frontend` without an explicit `containerNames`; a future OTel sidecar would be the first container in the Pod and would be killed instead of `server` | `testbed/chaos/oom-kill.yaml` pins `containerNames: [server]`. The deterministic container-kill is distinct from `stress-memory` (which holds memory until the kernel OOM-killer fires — that one is non-deterministic about *which* process is killed and uses `oomScoreAdj: 1000` to bias the kernel toward the stress-allocator). |
 | [S2] `cluster.yaml` | Port already in use (9090/3100/16686/9093/4317/4318) | A previous run, a sibling project, or a host service | Stop the other consumer, or change the host-side `extraPortMappings` in `testbed/kind/cluster.yaml`. 4317/4318 (OTLP) are added in slice 2. |
 | [S3] `jaeger` | Jaeger UI loads but `curl /api/services` is empty | Boutique's OTel sidecar is exporting OTLP but the Jaeger allInOne image is not configured to accept it | Verify the chart values file sets the OTLP receiver config. Slice 3 documents the exact path. |
+| [S5] `make observe-fault` | `FAIL: NetworkChaos needs kernel modules not loaded on this host` (or `describe` shows `AllInjected False`, `unable to flush ip sets`, and `kubectl delete` of the CR hangs) | The host kernel lacks `sch_netem` / `ip_set_hash_*`; kind shares the host kernel | `sudo modprobe sch_netem ip_set_hash_ipport ip_set_hash_net`, then persist via `/etc/modules-load.d/`. |
 | [S5] `make smoke-testbed` | C6 prom fails: no new frontend pod after 90s | The pod-kill CR fires once on apply and was not reconciled (see the Chaos Mesh row above), or the chaos-daemon is down | `kubectl -n chaos-testing describe podchaos boutique-frontend-pod-kill` (look for `Injected`); `kubectl -n chaos-mesh get pods`. |
 
 For deeper landmines, read [`docs/standards/09-testbed-ops.md`](../standards/09-testbed-ops.md) §9.4 in full.

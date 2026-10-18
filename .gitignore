@@ -58,6 +58,8 @@ kind-*.kubeconfig
 .kube/
 # Testbed-specific (Slice 2 writes a kubeconfig under testbed/.kube/; never commit)
 testbed/.kube/
+# observe-fault run output (signals, timelines); regenerate, never commit
+testbed/.observe/
 testbed/.kind/
 testbed/.kind-bootstrap.log
 testbed/**/kubeconfig

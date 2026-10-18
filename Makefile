@@ -12,6 +12,7 @@ COMPOSE ?= docker compose
 # Each `make <tool>-check` target verifies the pinned version is on PATH.
 # The pinned versions are the known-good set for the chart versions in
 # `testbed/helm-values/`. Do not bump without re-running `make smoke-testbed`.
+CHAOS_CR            ?= testbed/chaos/network-delay.yaml
 KIND_VERSION         ?= v0.24.0
 KUBECTL_VERSION      ?= v1.30.0
 HELM_VERSION         ?= v3.15.4
@@ -246,6 +247,10 @@ chaos-status: ## show chaos-mesh pods + the 5 chaos CRs
 chaos-delete: ## delete the 5 chaos CRs (but keep chaos-mesh installed)
 	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
 		delete podchaos,networkchaos,stresschaos --all -n $(CHAOS_TESTING_NS) --ignore-not-found
+
+.PHONY: observe-fault
+observe-fault: ## watch the ingestion paths during one chaos fault: make observe-fault [CHAOS_CR=testbed/chaos/<file>.yaml]
+	PY=$(PY) bash testbed/observe_fault.sh $(CHAOS_CR)
 
 .PHONY: smoke-ingestion
 smoke-ingestion: ## verify the P3 gate live: API + 3 collectors + a real alert (needs `make up`, port 8080 free)

@@ -26,7 +26,8 @@ class ServiceGraph:
 class GraphUpdate(BaseModel):
     caller: str           # canonical service name (lower-kebab)
     callee: str           # canonical service name (lower-kebab)
-    latency_ms: float     # observed span duration, finite and >= 0
+    latency_ms: float     # what the caller observed: its client span's duration (network + callee),
+                          # else the callee span's; finite and >= 0
     observed_at: datetime
 ```
 

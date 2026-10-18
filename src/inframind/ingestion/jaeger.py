@@ -85,10 +85,12 @@ def trace_to_outputs(trace: dict[str, Any], *, ingested_at: datetime) -> TraceOu
         if not str(s.get("operationName", "")).startswith(_SELF_INSTRUMENTATION_PREFIX)
     ]
     service_of: dict[str, str] = {}
+    span_by_id: dict[str, dict[str, Any]] = {}
     for s in spans:
         name = processes.get(s.get("processID"), {}).get("serviceName")
         if name:
             service_of[s["spanID"]] = name
+            span_by_id[s["spanID"]] = s
     trace_id = _trace_id(trace.get("traceID", ""))
     out = TraceOutputs()
     for s in spans:
@@ -97,22 +99,30 @@ def trace_to_outputs(trace: dict[str, Any], *, ingested_at: datetime) -> TraceOu
             continue
         tags = _tags(s)
         start_us, duration_ms = int(s["startTime"]), s["duration"] / 1000
-        parent = next(
+        parent_span = next(
             (
-                service_of[r["spanID"]]
+                span_by_id[r["spanID"]]
                 for r in s.get("references", [])
-                if r.get("refType") == "CHILD_OF" and r.get("spanID") in service_of
+                if r.get("refType") == "CHILD_OF" and r.get("spanID") in span_by_id
             ),
             None,
         )
+        parent = service_of[parent_span["spanID"]] if parent_span else None
         caller = parent if parent != service else None
-        if caller is not None:
+        if caller is not None and parent_span is not None:
+            # The edge latency is what the caller observed: its client span covers network time
+            # as well as the callee's processing, so a delay between services stays visible.
+            observed_ms = (
+                parent_span["duration"] / 1000
+                if _tags(parent_span).get("span.kind") == "client"
+                else duration_ms
+            )
             with contextlib.suppress(ValidationError):
                 out.updates.append(
                     GraphUpdate(
                         caller=caller,
                         callee=service,
-                        latency_ms=duration_ms,
+                        latency_ms=observed_ms,
                         observed_at=_us_to_datetime(start_us),
                     )
                 )

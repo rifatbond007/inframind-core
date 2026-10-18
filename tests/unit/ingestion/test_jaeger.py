@@ -69,16 +69,26 @@ def out(trace: dict[str, Any]) -> Any:
     return trace_to_outputs(trace, ingested_at=NOW)
 
 
-def test_cross_service_child_span_becomes_a_graph_update() -> None:
+def test_edge_latency_is_what_the_caller_observed_on_its_client_span() -> None:
+    """Network delay shows on the caller's client span, not on the callee's server span."""
     trace = tr(
         sp("a", "p1", "GET", kind="server"),
-        sp("b", "p1", "GetProduct", parent="a", kind="client", start=1_000),
+        sp("b", "p1", "GetProduct", parent="a", kind="client", start=1_000, dur_ms=210),
         sp("c", "p2", "GetProduct", parent="b", kind="server", start=2_000, dur_ms=7.5),
     )
     [update] = out(trace).updates
     assert (update.caller, update.callee) == ("frontend", "productcatalogservice")
-    assert update.latency_ms == 7.5
+    assert update.latency_ms == 210.0
     assert update.observed_at == datetime.fromtimestamp((NOW_US - 5_000_000 + 2_000) / 1e6, tz=UTC)
+
+
+def test_edge_latency_falls_back_to_the_callee_span_when_the_parent_is_not_a_client_span() -> None:
+    trace = tr(
+        sp("a", "p1", "GET", kind="server", dur_ms=50),
+        sp("c", "p2", "GetProduct", parent="a", kind="server", start=2_000, dur_ms=7.5),
+    )
+    [update] = out(trace).updates
+    assert update.latency_ms == 7.5
 
 
 def test_same_service_parent_child_is_not_an_edge() -> None:

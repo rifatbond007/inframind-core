@@ -67,7 +67,7 @@ Call edges travel on a separate stream: `GraphUpdate{caller, callee, latency_ms,
 - **Loki** — pulled by LogQL `query_range`. Only warning/error lines become signals; `message`
   is redacted and truncated to 500 characters, and gRPC `code = X` is kept as `grpc_code`.
 - **Jaeger** — pulled by the Jaeger HTTP API (`/api/traces`). Per poll: a `GraphUpdate` per
-  cross-service parent->child span pair, a `TRACE` signal per error span, and one
+  cross-service parent->child span pair (latency is the caller's client-span duration, so network delay between services stays visible), a `TRACE` signal per error span, and one
   `span_latency` signal per service (p95 of server spans).
 - **Alertmanager** — pushed by webhook to `POST /webhooks/alertmanager`
   (`src/inframind/api/alertmanager.py`). It is the only ingress that is **not** a pull.
