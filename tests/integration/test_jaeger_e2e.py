@@ -68,6 +68,18 @@ async def test_live_poll_publishes_well_formed_updates_and_signals(
         assert all(u.caller != u.callee for u in updates)
         assert all(s.source is Source.JAEGER and s.type is SignalType.TRACE for s in signals)
         assert all(s.service != "unknown" for s in signals)
-        assert await collector.poll_once() == 0
+        # Live traffic (kubelet probes) keeps producing new traces, so a second poll may publish
+        # *new* items; what it must never do is publish the same item twice.
+        await collector.poll_once()
+        updates = [
+            GraphUpdate.model_validate_json(f[b"data"]) for _, f in await redis.xrange(graph_stream)
+        ]
+        signals = [
+            Signal.model_validate_json(f[b"data"]) for _, f in await redis.xrange(signals_stream)
+        ]
+        update_keys = [(u.caller, u.callee, u.observed_at) for u in updates]
+        error_spans = [s.attrs["span_id"] for s in signals if "span_id" in s.attrs]
+        assert len(update_keys) == len(set(update_keys))
+        assert len(error_spans) == len(set(error_spans))
     finally:
         await redis.delete(signals_stream, graph_stream)

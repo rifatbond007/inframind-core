@@ -57,6 +57,13 @@ async def test_live_poll_publishes_only_valid_problem_signals(
             assert s.type is SignalType.LOG
             assert s.service != "unknown"
             assert s.attrs["level"] in {"warning", "error"}
-        assert await collector.poll_once() == 0
+        # A new error line may legitimately arrive between polls; republishing one must not.
+        await collector.poll_once()
+        entries = await redis.xrange(stream)
+        keys = [
+            (s.ts, s.attrs["pod"], s.attrs["message"])
+            for s in (Signal.model_validate_json(f[b"data"]) for _, f in entries)
+        ]
+        assert len(keys) == len(set(keys))
     finally:
         await redis.delete(stream)
