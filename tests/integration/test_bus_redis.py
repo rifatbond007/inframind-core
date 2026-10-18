@@ -6,10 +6,11 @@ import os
 from uuid import uuid4
 
 import pytest
+from redis.asyncio import Redis
+
 from inframind.common.bus import SignalConsumer, publish
 from inframind.common.signal import Signal, SignalType, Source
 from inframind.common.time import utcnow
-from redis.asyncio import Redis
 
 pytestmark = pytest.mark.integration
 

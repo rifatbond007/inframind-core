@@ -6,6 +6,8 @@ from datetime import UTC, datetime, timedelta, timezone
 from typing import Any
 
 import pytest
+from pydantic import ValidationError
+
 from inframind.common.ids import ULID_LENGTH, new_ulid
 from inframind.common.signal import (
     UNKNOWN_SERVICE,
@@ -16,7 +18,6 @@ from inframind.common.signal import (
     normalise_service,
 )
 from inframind.common.time import utcnow
-from pydantic import ValidationError
 
 
 def make(**over: Any) -> Signal:

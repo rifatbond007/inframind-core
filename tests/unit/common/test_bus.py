@@ -6,6 +6,7 @@ import asyncio
 
 import pytest
 from fakeredis import FakeAsyncRedis
+
 from inframind.common import stream_keys
 from inframind.common.bus import SignalConsumer, publish
 from inframind.common.exceptions import BusError

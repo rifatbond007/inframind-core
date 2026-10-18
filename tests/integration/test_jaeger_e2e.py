@@ -7,10 +7,11 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from redis.asyncio import Redis
+
 from inframind.common.graph_update import GraphUpdate
 from inframind.common.signal import Signal, SignalType, Source
 from inframind.ingestion.jaeger import JaegerCollector
-from redis.asyncio import Redis
 
 pytestmark = pytest.mark.integration
 

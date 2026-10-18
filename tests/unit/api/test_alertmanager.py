@@ -8,6 +8,7 @@ from typing import Any
 import httpx
 import pytest
 from fakeredis import FakeAsyncRedis
+
 from inframind.api.alertmanager import alerts_to_signals
 from inframind.api.app import create_app
 from inframind.common import stream_keys

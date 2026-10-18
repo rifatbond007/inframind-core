@@ -10,6 +10,7 @@ from typing import Any
 import httpx
 import pytest
 from fakeredis import FakeAsyncRedis
+
 from inframind.common import stream_keys
 from inframind.common.signal import Severity, Signal, SignalType, Source
 from inframind.ingestion.loki import LokiCollector, classify_line, entry_to_signal

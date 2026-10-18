@@ -9,6 +9,7 @@ from typing import Any
 import httpx
 import pytest
 from fakeredis import FakeAsyncRedis
+
 from inframind.common import stream_keys
 from inframind.common.graph_update import GraphUpdate
 from inframind.common.signal import Severity, Signal, SignalType, Source

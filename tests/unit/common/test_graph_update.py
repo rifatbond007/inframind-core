@@ -7,12 +7,13 @@ from typing import Any
 
 import pytest
 from fakeredis import FakeAsyncRedis
+from pydantic import ValidationError
+from redis import exceptions as redis_exc
+
 from inframind.common import stream_keys
 from inframind.common.bus import publish_graph_update
 from inframind.common.exceptions import BusError
 from inframind.common.graph_update import GraphUpdate
-from pydantic import ValidationError
-from redis import exceptions as redis_exc
 
 NOW = datetime(2026, 10, 19, 12, 0, 0, tzinfo=UTC)
 

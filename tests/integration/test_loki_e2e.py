@@ -7,9 +7,10 @@ from uuid import uuid4
 
 import httpx
 import pytest
+from redis.asyncio import Redis
+
 from inframind.common.signal import Signal, SignalType, Source
 from inframind.ingestion.loki import LokiCollector
-from redis.asyncio import Redis
 
 pytestmark = pytest.mark.integration
 
