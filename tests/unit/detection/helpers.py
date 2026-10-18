@@ -54,3 +54,48 @@ def feed(
 def raw(**fields: Any) -> dict[str, Any]:
     """Return fields unchanged (documents intent at call sites)."""
     return fields
+
+
+def sec(seconds: float) -> datetime:
+    """Return T0 plus `seconds`."""
+    return T0 + timedelta(seconds=seconds)
+
+
+def loki_error(seconds: float, *, service: str = "frontend", level: str = "error") -> Signal:
+    """A Loki warning/error log signal observed `seconds` after T0."""
+    return Signal(
+        ts=sec(seconds),
+        source=Source.LOKI,
+        type=SignalType.LOG,
+        service=service,
+        attrs={"level": level, "message": "request error"},
+    )
+
+
+def jaeger_error(seconds: float, *, service: str = "frontend") -> Signal:
+    """A Jaeger error-span signal observed `seconds` after T0."""
+    return Signal(
+        ts=sec(seconds),
+        source=Source.JAEGER,
+        type=SignalType.TRACE,
+        service=service,
+        attrs={"span_id": f"s{seconds}", "operation": "GET", "duration_ms": 3.0},
+    )
+
+
+def span_latency(
+    p95_ms: float, i: int, *, service: str = "frontend", span_count: int = 40
+) -> Signal:
+    """A Jaeger per-service latency signal, one per 30-second poll."""
+    return Signal(
+        ts=at(i),
+        source=Source.JAEGER,
+        type=SignalType.TRACE,
+        service=service,
+        attrs={
+            "metric": "span_latency",
+            "p95_ms": p95_ms,
+            "span_count": span_count,
+            "error_count": 0,
+        },
+    )
