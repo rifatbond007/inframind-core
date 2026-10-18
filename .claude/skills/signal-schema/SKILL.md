@@ -12,4 +12,4 @@ Before implementing or changing collectors, detectors, or bus payloads:
 1. Read the standards file and [`docs/surface-map.md`](../../../docs/surface-map.md) for wire shapes.
 2. Add or update unit tests when the schema changes.
 
-Implementation lives in `src/inframind/common/` (Phase P2).
+Implementation lives in `src/inframind/common/` (`signal.py`, `graph_update.py`, `redact.py`; Phase P2/P3).

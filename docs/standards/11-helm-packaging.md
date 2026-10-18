@@ -76,7 +76,7 @@ loki:
 jaeger:
   url: "http://jaeger-query:16686"
 alertmanager:
-  webhookUrl: "http://inframind-api:8080/alertmanager"
+  webhookUrl: "http://inframind-api:8080/webhooks/alertmanager"
 ```
 
 Defaults are sane for a `kind` cluster. Production-scale values are out of scope (D8).

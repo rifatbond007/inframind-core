@@ -66,3 +66,60 @@ def test_env_example_documents_the_collector_and_api_keys() -> None:
 def test_pyproject_homepage_matches_git_origin_name() -> None:
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert meta["project"]["urls"]["Homepage"].endswith("/inframind-core")
+
+
+DOC_FILES = [
+    *sorted((ROOT / "docs" / "standards").glob("*.md")),
+    ROOT / "docs" / "surface-map.md",
+    ROOT / "docs" / "ARCHITECTURE.md",
+    ROOT / "CLAUDE.md",
+    *sorted((ROOT / ".claude").rglob("*.md")),
+    *sorted((ROOT / "src").rglob("README.md")),
+    *sorted((ROOT / "src").rglob("__init__.py")),
+]
+REMOVED_NAMES = [
+    r"SIGNALS_STREAM",
+    r"get_redis",
+    r"redis_client",
+    r"inframind\.signals",
+    r"alertmanager_webhook\.py",
+    r"api\.webhooks",
+    r"from dateutil",
+    r"(?<!webhooks)(?<!api)/alertmanager\b(?!\.py)",
+]
+
+
+def test_docs_do_not_reference_removed_names() -> None:
+    hits = []
+    for path in DOC_FILES:
+        for lineno, line in enumerate(path.read_text().splitlines(), start=1):
+            for pattern in REMOVED_NAMES:
+                if re.search(pattern, line):
+                    hits.append(f"{path.relative_to(ROOT)}:{lineno}: /{pattern}/")
+    assert not hits, "stale references:\n" + "\n".join(hits)
+
+
+def test_ingestion_agent_lists_only_existing_collectors() -> None:
+    agent = (ROOT / ".claude" / "agents" / "build" / "ingestion-engineer.md").read_text()
+    table = [line for line in agent.splitlines() if line.startswith("| `") and ".py`" in line]
+    assert table
+    for line in table:
+        name = re.search(r"`([\w/]+\.py)`", line)
+        assert name
+        candidates = [
+            ROOT / "src" / "inframind" / "ingestion" / name.group(1),
+            ROOT / "src" / "inframind" / "api" / name.group(1),
+        ]
+        assert any(c.exists() for c in candidates), f"{name.group(1)} does not exist"
+
+
+def test_stale_route_pattern_catches_the_old_forms_and_spares_the_new_ones() -> None:
+    pattern = next(p for p in REMOVED_NAMES if "(?!" in p)
+    stale = ["`/alertmanager` (FastAPI)", 'webhookUrl: "http://api:8080/alertmanager"']
+    fine = [
+        "POST /webhooks/alertmanager",
+        "src/inframind/api/alertmanager.py",
+        "api/alertmanager.py",
+    ]
+    assert all(re.search(pattern, line) for line in stale)
+    assert not any(re.search(pattern, line) for line in fine)

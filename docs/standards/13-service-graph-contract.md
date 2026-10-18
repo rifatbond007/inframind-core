@@ -21,11 +21,12 @@ class ServiceGraph:
     def snapshot(self) -> dict: ...
     def persist(self) -> None: ...
 
-@dataclass
-class GraphUpdate:
+# Implemented as a frozen pydantic model in src/inframind/common/graph_update.py (not a
+# dataclass), like Signal, so it validates on the wire: canonical names, no self-loop, aware UTC.
+class GraphUpdate(BaseModel):
     caller: str           # canonical service name (lower-kebab)
     callee: str           # canonical service name (lower-kebab)
-    latency_ms: float     # observed span duration
+    latency_ms: float     # observed span duration, finite and >= 0
     observed_at: datetime
 ```
 

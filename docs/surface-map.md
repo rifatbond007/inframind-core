@@ -36,36 +36,41 @@ Every collector emits a `Signal`. The schema is in `src/inframind/common/signal.
 A short version, so this file stays the surface map:
 
 ```python
-class Signal(BaseModel):
-    id: str                 # ULID, set by the collector
-    source: Literal["prometheus", "loki", "jaeger", "alertmanager"]
-    service: str            # the service the signal is about
-    kind: Literal["metric", "log", "trace", "alert"]
-    timestamp: datetime     # when the signal was observed (NOT when we ingested it)
-    ingested_at: datetime   # when the collector enqueued it
-    value: float | None     # the metric value, error count, latency, etc. (None for traces/logs)
-    labels: dict[str, str]  # free-form, source-specific (pod, severity, status code, ...)
-    raw: dict | None        # the unparsed payload, for debugging. NEVER sent to the LLM.
+class Signal(BaseModel):  # frozen, extra="forbid"
+    id: str                  # ULID, set when the signal is created
+    ts: datetime             # when it was OBSERVED (tz-aware UTC), never when we ingested it
+    source: Source           # prometheus | loki | jaeger | otel | alertmanager
+    type: SignalType         # metric | log | trace | alert
+    service: str             # canonical lower-kebab; "unknown" is dropped by the bus
+    severity: Severity       # info | warning | critical (coarse; the detector refines it)
+    trace_id: str | None     # W3C, 32 lowercase hex
+    attrs: dict[str, Any]    # JSON-serialisable detail; "ingested_at" lives here
 ```
 
 **Three things are pinned:**
 
-1. **`timestamp` is observation time, not ingestion time.** Detectors use `timestamp`. The
-   `ingested_at` field exists so we can see lag.
-2. **`raw` is local-only.** It is dropped before the LLM stage and not persisted.
+1. **`ts` is observation time, not ingestion time.** Detectors use `ts`. The collector records
+   `attrs["ingested_at"]` so we can see lag.
+2. **There is no raw payload.** Collectors keep a truncated, redacted `message` or description,
+   never the backend's raw object (`common/redact.py`, D9).
 3. **Decimals stay strings in the wire format.** Floats are fine for metrics; monetary or
    capacity-shaped values are strings until they cross the storage boundary.
 
+Call edges travel on a separate stream: `GraphUpdate{caller, callee, latency_ms, observed_at}`
+(`common/graph_update.py`) on `stream:graph-updates`, consumed only by the RCA worker (D21).
+
 ### Source-specific notes
 
-- **Prometheus** — pulled by `query_range`. Labels include `pod`, `instance`, `job`. The collector
-  paginates with `--start` / `--end` / `--step`; it does **not** use a streaming pull.
-- **Loki** — pulled by LogQL `query_range`. Labels include `container`, `namespace`. Log lines
-  are stored in `raw`; the LLM never sees them.
-- **Jaeger / OTLP** — pulled by the Jaeger HTTP API (`/api/traces`). Service names and operation
-  names are kept in `labels`. Only error spans are enqueued.
-- **Alertmanager** — pushed via webhook into `inframind.api.webhooks.alertmanager`. The
-  webhook is the only ingress that is **not** a pull.
+- **Prometheus** — pulled by `query_range`: per-pod CPU, working-set memory and container
+  restarts from cAdvisor and kube-state-metrics (Boutique exposes no per-service request
+  metrics). `service` is derived from the pod name.
+- **Loki** — pulled by LogQL `query_range`. Only warning/error lines become signals; `message`
+  is redacted and truncated to 500 characters, and gRPC `code = X` is kept as `grpc_code`.
+- **Jaeger** — pulled by the Jaeger HTTP API (`/api/traces`). Per poll: a `GraphUpdate` per
+  cross-service parent->child span pair, a `TRACE` signal per error span, and one
+  `span_latency` signal per service (p95 of server spans).
+- **Alertmanager** — pushed by webhook to `POST /webhooks/alertmanager`
+  (`src/inframind/api/alertmanager.py`). It is the only ingress that is **not** a pull.
 
 ## Incidents out
 

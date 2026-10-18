@@ -1,10 +1,9 @@
-"""Public API surface (FastAPI).
+"""Public API surface (FastAPI). Only this package may import FastAPI.
 
-Planned (Step 8):
+Built so far:
 
 * ``/healthz`` — liveness probe.
-* ``/readyz`` — readiness probe.
-* ``/metrics`` — Prometheus-format metrics for InfraMind itself.
-* ``/incidents`` — list / detail of recent incidents.
-* ``/alertmanager`` — POST webhook from Alertmanager.
+* ``POST /webhooks/alertmanager`` — the only push ingress (see ``alertmanager.py``).
+
+Planned (Step 8): ``/readyz``, ``/metrics`` and the ``/incidents`` routes.
 """

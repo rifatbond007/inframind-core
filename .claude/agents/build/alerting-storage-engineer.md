@@ -13,7 +13,7 @@ You close the loop: emit deduplicated alerts with full RCA payloads and persist 
 
 - `src/inframind/alerting/` — router, dedup, payload, sinks.
 - `src/inframind/storage/` — Postgres models, migrations, audit log.
-- `src/inframind/api/` — FastAPI surface (`/healthz`, `/readyz`, `/metrics`, `/incidents`, `/alertmanager`).
+- `src/inframind/api/` — FastAPI surface (`/healthz`, `/readyz`, `/metrics`, `/incidents`, and `POST /webhooks/alertmanager`, which already exists in `api/alertmanager.py`).
 
 **Naming caveat:** the agent is called `alerting-storage-engineer` for historical reasons, but the scope covers three domains (alerting, storage, API). The three sub-domains share the same Prome-owner branch; if a future change splits this into three agents, the file naming and `AGENT_WORKFLOW.md` table are updated in the same PR (D-change discipline).
 
