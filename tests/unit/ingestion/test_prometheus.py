@@ -192,3 +192,25 @@ async def test_run_stops_when_the_event_is_set() -> None:
     stop.set()
     await asyncio.wait_for(task, timeout=2)
     assert len(await stream_signals(redis)) == 1
+
+
+async def test_cursor_entries_for_vanished_pods_are_pruned() -> None:
+    redis = FakeAsyncRedis()
+    prom = FakeProm(
+        {
+            "q_cpu": prom_ok([row("frontend-7d9f8c6b5-jfpxt")]),
+            "q_mem": prom_ok([]),
+        }
+    )
+    clock = {"now": NOW}
+    client = httpx.AsyncClient(transport=httpx.MockTransport(prom), base_url="http://prom")
+    collector = PrometheusCollector(
+        client, redis, queries=QUERIES, interval_s=30, clock=lambda: clock["now"]
+    )
+    await collector.poll_once()
+    assert len(collector._cursor) == 1
+
+    clock["now"] = datetime.fromtimestamp(T0 + 301, tz=UTC)
+    prom.answers["q_cpu"] = prom_ok([row("cartservice-6c8f9d7b5-qwrtz", [[T0 + 300, "0.5"]])])
+    await collector.poll_once()
+    assert [pod for _, pod in collector._cursor] == ["cartservice-6c8f9d7b5-qwrtz"]

@@ -9,13 +9,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import math
-import os
-import signal as os_signal
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from typing import Any
 
 import httpx
@@ -24,11 +21,15 @@ from redis.asyncio import Redis
 from inframind.common import stream_keys
 from inframind.common.bus import publish
 from inframind.common.exceptions import BusError
-from inframind.common.logging import configure_logging, get_logger
+from inframind.common.logging import get_logger
 from inframind.common.signal import Severity, Signal, SignalType, Source, service_from_pod
 from inframind.common.time import utcnow
+from inframind.ingestion.runner import run_collector
 
 log = get_logger(__name__)
+
+# Series not seen for this many intervals are forgotten, so pod churn cannot grow the cursor.
+_CURSOR_TTL_INTERVALS = 10
 
 _NAMESPACE = "default"
 
@@ -128,6 +129,8 @@ class PrometheusCollector:
                 continue
             for row in rows:
                 published += await self._publish_row(query.name, row, now)
+        horizon = now - timedelta(seconds=_CURSOR_TTL_INTERVALS * self._interval_s)
+        self._cursor = {k: ts for k, ts in self._cursor.items() if ts >= horizon}
         return published
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -172,20 +175,13 @@ class PrometheusCollector:
 
 async def amain() -> None:
     """Run the collector until SIGINT/SIGTERM. Reads PROMETHEUS_URL, REDIS_URL, PROM_INTERVAL_S."""
-    configure_logging()
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (os_signal.SIGINT, os_signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
-    redis = Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
-    base_url = os.environ.get("PROMETHEUS_URL", "http://localhost:30090")
-    interval_s = int(os.environ.get("PROM_INTERVAL_S", "30"))
-    async with httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(10.0)) as client:
-        try:
-            await PrometheusCollector(client, redis, interval_s=interval_s).run(stop)
-        finally:
-            await redis.aclose()
+    await run_collector(
+        lambda client, redis, interval_s: PrometheusCollector(client, redis, interval_s=interval_s),
+        url_env="PROMETHEUS_URL",
+        default_url="http://localhost:30090",
+        interval_env="PROM_INTERVAL_S",
+        timeout_s=10.0,
+    )
 
 
 if __name__ == "__main__":

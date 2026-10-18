@@ -17,11 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import logging
 import math
-import os
 import re
-import signal as os_signal
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -36,9 +33,10 @@ from inframind.common import stream_keys
 from inframind.common.bus import publish, publish_graph_update
 from inframind.common.exceptions import BusError
 from inframind.common.graph_update import GraphUpdate
-from inframind.common.logging import configure_logging, get_logger
+from inframind.common.logging import get_logger
 from inframind.common.signal import Severity, Signal, SignalType, Source
 from inframind.common.time import utcnow
+from inframind.ingestion.runner import run_collector
 
 log = get_logger(__name__)
 
@@ -308,20 +306,13 @@ class JaegerCollector:
 
 async def amain() -> None:
     """Run the collector until SIGINT/SIGTERM. Reads JAEGER_URL, REDIS_URL, JAEGER_INTERVAL_S."""
-    configure_logging()
-    logging.getLogger("httpx").setLevel(logging.WARNING)
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (os_signal.SIGINT, os_signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
-    redis = Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
-    base_url = os.environ.get("JAEGER_URL", "http://localhost:30686")
-    interval_s = int(os.environ.get("JAEGER_INTERVAL_S", "30"))
-    async with httpx.AsyncClient(base_url=base_url, timeout=httpx.Timeout(20.0)) as client:
-        try:
-            await JaegerCollector(client, redis, interval_s=interval_s).run(stop)
-        finally:
-            await redis.aclose()
+    await run_collector(
+        lambda client, redis, interval_s: JaegerCollector(client, redis, interval_s=interval_s),
+        url_env="JAEGER_URL",
+        default_url="http://localhost:30686",
+        interval_env="JAEGER_INTERVAL_S",
+        timeout_s=20.0,
+    )
 
 
 if __name__ == "__main__":
