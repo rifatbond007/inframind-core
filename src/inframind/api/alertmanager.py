@@ -8,6 +8,7 @@ are dropped by the bus (and counted here), e.g. the always-firing `Watchdog`.
 from __future__ import annotations
 
 import hmac
+import json
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -33,6 +34,9 @@ from inframind.common.time import utcnow
 log = get_logger(__name__)
 
 router = APIRouter()
+
+MAX_BODY_BYTES = 1_048_576
+MAX_ALERTS = 1000
 
 _NO_END = "0001-01-01T00:00:00Z"
 _SEVERITY = {"critical": Severity.CRITICAL, "warning": Severity.WARNING}
@@ -105,6 +109,8 @@ def alerts_to_signals(
     alerts = payload.get("alerts")
     if not isinstance(alerts, list):
         raise ValueError("payload must contain an alerts list")
+    if len(alerts) > MAX_ALERTS:
+        raise ValueError(f"payload has more than {MAX_ALERTS} alerts")
     group_key = str(payload.get("groupKey", ""))
     try:
         return [
@@ -121,13 +127,28 @@ def _authorised(request: Request) -> bool:
     return scheme.lower() == "bearer" and hmac.compare_digest(token.encode(), secret.encode())
 
 
+async def _read_body(request: Request) -> bytes:
+    """Read the request body, refusing anything over `MAX_BODY_BYTES` without buffering it."""
+    declared = request.headers.get("content-length", "")
+    if declared.isdigit() and int(declared) > MAX_BODY_BYTES:
+        raise HTTPException(status_code=413, detail="request body too large")
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > MAX_BODY_BYTES:
+            raise HTTPException(status_code=413, detail="request body too large")
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
 @router.post("/webhooks/alertmanager")
 async def alertmanager_webhook(request: Request) -> dict[str, int]:
     """Receive an Alertmanager notification and publish its alerts to `stream:signals`."""
     if not _authorised(request):
         raise HTTPException(status_code=401, detail="invalid webhook credentials")
     try:
-        body = await request.json()
+        body = json.loads(await _read_body(request))
         if not isinstance(body, dict):
             raise ValueError("body must be a JSON object")
         request_id = request.headers.get("x-request-id") or uuid.uuid4().hex

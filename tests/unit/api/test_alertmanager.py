@@ -9,7 +9,7 @@ import httpx
 import pytest
 from fakeredis import FakeAsyncRedis
 
-from inframind.api.alertmanager import alerts_to_signals
+from inframind.api.alertmanager import MAX_ALERTS, MAX_BODY_BYTES, alerts_to_signals
 from inframind.api.app import create_app
 from inframind.common import stream_keys
 from inframind.common.signal import Severity, Signal, SignalType, Source
@@ -225,3 +225,79 @@ def test_secrets_and_pii_in_annotations_are_redacted_but_labels_are_kept() -> No
     dumped = sig.attrs["annotations"]["description"]
     assert "a@b.com" not in dumped and "10.1.2.3" not in dumped and "hunter2" not in dumped
     assert sig.attrs["labels"]["pod"] == "frontend-5c744dd6bb-jfpxt"
+
+
+async def test_oversized_body_is_413_and_publishes_nothing(
+    client: httpx.AsyncClient, redis: FakeAsyncRedis
+) -> None:
+    resp = await client.post(URL, content=b"x" * (MAX_BODY_BYTES + 1), headers=AUTH)
+    assert resp.status_code == 413
+    assert await stream(redis) == []
+
+
+async def test_body_at_the_limit_is_read_not_rejected_as_too_large(
+    client: httpx.AsyncClient,
+) -> None:
+    resp = await client.post(URL, content=b"x" * MAX_BODY_BYTES, headers=AUTH)
+    assert resp.status_code == 422  # not JSON, but it was within the size bound
+
+
+async def test_too_many_alerts_is_422_and_publishes_nothing(
+    client: httpx.AsyncClient, redis: FakeAsyncRedis
+) -> None:
+    resp = await client.post(
+        URL, json=payload(*[alert() for _ in range(MAX_ALERTS + 1)]), headers=AUTH
+    )
+    assert resp.status_code == 422
+    assert await stream(redis) == []
+
+
+async def test_exactly_max_alerts_is_accepted(client: httpx.AsyncClient) -> None:
+    resp = await client.post(URL, json=payload(*[alert() for _ in range(MAX_ALERTS)]), headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["accepted"] == MAX_ALERTS
+
+
+async def test_invalid_utf8_body_is_422(client: httpx.AsyncClient) -> None:
+    resp = await client.post(URL, content=b"\xff\xfe{}", headers=AUTH)
+    assert resp.status_code == 422
+
+
+async def test_unauthorised_oversized_body_is_401_not_413(client: httpx.AsyncClient) -> None:
+    resp = await client.post(URL, content=b"x" * (MAX_BODY_BYTES + 1))
+    assert resp.status_code == 401
+
+
+async def test_retry_after_partial_publish_repeats_identical_dedup_keys() -> None:
+    class FailsOnSecondWrite(FakeAsyncRedis):
+        writes = 0
+        broken = True
+
+        async def xadd(self, *args: Any, **kwargs: Any) -> Any:
+            from redis import exceptions
+
+            self.writes += 1
+            if self.broken and self.writes == 2:
+                raise exceptions.ConnectionError("down")
+            return await super().xadd(*args, **kwargs)
+
+    flaky = FailsOnSecondWrite()
+    second = alert(
+        labels={"alertname": "B", "service": "cartservice", "severity": "critical"},
+        fingerprint="bbbb",
+    )
+    body = payload(alert(), second)
+    app = create_app(flaky, webhook_secret=SECRET)
+    async with httpx.AsyncClient(
+        transport=httpx.ASGITransport(app=app), base_url="http://api"
+    ) as c:
+        assert (await c.post(URL, json=body, headers=AUTH)).status_code == 503
+        flaky.broken = False
+        assert (await c.post(URL, json=body, headers=AUTH)).status_code == 200  # Alertmanager retry
+    keys = [
+        (s.attrs["fingerprint"], s.attrs["starts_at"], s.attrs["status"])
+        for s in await stream(flaky)
+    ]
+    assert len(keys) == 3  # the first alert was published by both attempts
+    assert keys.count(("78da0ef7fc3bc57d", "2026-10-19T11:58:00.123456+00:00", "firing")) == 2
+    assert len(set(keys)) == 2  # downstream can dedupe on (fingerprint, starts_at, status)
