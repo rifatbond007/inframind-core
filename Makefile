@@ -247,6 +247,10 @@ chaos-delete: ## delete the 5 chaos CRs (but keep chaos-mesh installed)
 	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
 		delete podchaos,networkchaos,stresschaos --all -n $(CHAOS_TESTING_NS) --ignore-not-found
 
+.PHONY: smoke-ingestion
+smoke-ingestion: ## verify the P3 gate live: API + 3 collectors + a real alert (needs `make up`, port 8080 free)
+	$(PY) testbed/smoke_ingestion.py
+
 .PHONY: smoke-testbed
 smoke-testbed: ## verify the P1 → P2 gate (6 checks; see testbed/README.md §4)
 	@TESTBED_CONTEXT=$(TESTBED_CONTEXT) \

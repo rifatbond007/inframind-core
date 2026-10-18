@@ -18,7 +18,8 @@ testbed/
 ├── helm-values/       (kube-prometheus-stack, loki, alloy, jaeger, chaos-mesh)
 ├── boutique/          (Online Boutique kustomize + memory/tracing patches)
 ├── chaos/             (5 Chaos Mesh CRs + install.sh)
-└── smoke.sh           (the P1 -> P2 gate)
+├── smoke.sh           (the P1 -> P2 gate)
+└── smoke_ingestion.py (the P3 gate: API + collectors + a real Alertmanager alert)
 ```
 
 `make up` runs the whole chain: kind, obs, boutique, chaos, then Compose.
@@ -85,6 +86,24 @@ the pod-kill chaos assertion from the P1 → P2 phase gate:
 | 4 | Loki `/loki/api/v1/status/buildinfo` (through gateway) | 200 with `version` field (the gateway's nginx doesn't proxy `/ready`; the pod's own readiness probe uses `/ready` directly and is passing — verified by `kubectl get pod loki-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'` = `True`) |
 | 5 | Jaeger UI `/` | HTML page loads |
 | 6 | Re-create `testbed/chaos/pod-kill.yaml`, wait up to 90s | Prometheus shows a **newer** `kube_pod_created` for the frontend (pod-kill replaces the pod, so the restart counter never moves) **and** Loki has logs from the killed pod and its replacement (Alloy ships pod logs) **and** Jaeger has `frontend` traces (smoke sends a few requests through a port-forward, because the load generator is scaled to 0) |
+
+### P3 ingestion gate
+
+`make smoke-ingestion` runs `testbed/smoke_ingestion.py` against the live testbed. It starts the
+API and the Prometheus, Loki and Jaeger collectors, sends traffic through the frontend (including
+one uniquely tagged failing request) and one synthetic alert through the real Alertmanager, then
+checks the real streams:
+
+| Check | Pass condition |
+|---|---|
+| C1 | Redis, Prometheus, Loki, Jaeger and Alertmanager are reachable |
+| C4 `prometheus` | metric signals for at least 6 distinct services |
+| C4 `loki` | a `frontend` error with `grpc_code=NotFound` carrying this run's id |
+| C4 `jaeger-edges` | graph updates for `frontend->productcatalogservice`, `frontend->recommendationservice`, `recommendationservice->productcatalogservice` |
+| C4 `jaeger-error` | an error-span signal with a 32-hex `trace_id` carrying this run's id |
+| C4 `alertmanager` | the synthetic alert arrives as a `frontend` Alertmanager signal |
+
+Port 8080 must be free: the in-cluster Alertmanager receiver posts to the host on 8080.
 
 A green smoke test is the precondition for any later phase work. If any
 check is red, `make down` and start over — do not investigate mid-state
