@@ -31,6 +31,7 @@ from redis.asyncio import Redis
 
 from inframind.common import stream_keys
 from inframind.common.bus import publish, publish_graph_update
+from inframind.common.collector_state import CollectorState, MemoryState, State
 from inframind.common.exceptions import BusError
 from inframind.common.graph_update import GraphUpdate
 from inframind.common.logging import get_logger
@@ -172,6 +173,7 @@ class JaegerCollector:
         limit: int = 1000,
         signals_stream: str = stream_keys.SIGNALS,
         graph_stream: str = stream_keys.GRAPH_UPDATES,
+        state: State | None = None,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self._client = client
@@ -184,11 +186,19 @@ class JaegerCollector:
         self._signals_stream = signals_stream
         self._graph_stream = graph_stream
         self._clock = clock
+        self._state: State = state or MemoryState()
+        self._cursor_loaded = False
         self._cursor_us: int | None = None
-        self._seen: dict[str, int] = {}
 
     async def poll_once(self) -> int:
         """Query Jaeger once. Returns the number of items published (updates + signals)."""
+        if not self._cursor_loaded:
+            try:
+                self._cursor_us = await self._state.load_cursor()
+            except BusError as e:
+                log.warning("jaeger_state_unavailable", error=str(e))
+                return 0
+            self._cursor_loaded = True
         now = self._clock()
         end_us = int(now.timestamp()) * _US + now.microsecond - self._settle_us
         start_us = (
@@ -210,15 +220,20 @@ class JaegerCollector:
                 continue
             for trace in traces:
                 tid = str(trace.get("traceID", ""))
-                if tid and tid not in self._seen:
-                    fresh.setdefault(tid, trace)
+                try:
+                    if tid and not await self._state.is_seen(tid):
+                        fresh.setdefault(tid, trace)
+                except BusError as e:
+                    log.warning("jaeger_state_unavailable", error=str(e))
+                    return 0
         published, server_spans, complete = await self._publish_traces(fresh, now)
         published += await self._publish_stats(server_spans, now, end_us) if complete else 0
         if complete:
             self._cursor_us = end_us
-        if self._cursor_us is not None:
-            horizon = self._cursor_us - self._overlap_us
-            self._seen = {t: s for t, s in self._seen.items() if s >= horizon}
+            try:
+                await self._state.save_cursor(end_us)
+            except BusError as e:
+                log.warning("jaeger_cursor_save_failed", error=str(e))
         return published
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -266,10 +281,10 @@ class JaegerCollector:
                 for signal in sorted(outputs.errors, key=lambda s: (s.ts, s.attrs["span_id"])):
                     if await publish(self._redis, signal, stream=self._signals_stream) is not None:
                         published += 1
+                await self._state.mark_seen(tid)
             except BusError as e:
                 log.warning("jaeger_publish_failed", trace_id=tid, error=str(e))
                 return published, server_spans, False
-            self._seen[tid] = _trace_start_us(trace)
             server_spans.extend(outputs.server_spans)
         return published, server_spans, True
 
@@ -307,7 +322,9 @@ class JaegerCollector:
 async def amain() -> None:
     """Run the collector until SIGINT/SIGTERM. Reads JAEGER_URL, REDIS_URL, JAEGER_INTERVAL_S."""
     await run_collector(
-        lambda client, redis, interval_s: JaegerCollector(client, redis, interval_s=interval_s),
+        lambda client, redis, interval_s: JaegerCollector(
+            client, redis, interval_s=interval_s, state=CollectorState(redis, "jaeger")
+        ),
         url_env="JAEGER_URL",
         default_url="http://localhost:30686",
         interval_env="JAEGER_INTERVAL_S",

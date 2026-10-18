@@ -12,6 +12,7 @@ import pytest
 from fakeredis import FakeAsyncRedis
 
 from inframind.common import stream_keys
+from inframind.common.collector_state import CollectorState
 from inframind.common.signal import Severity, Signal, SignalType, Source
 from inframind.ingestion.loki import LokiCollector, classify_line, entry_to_signal
 
@@ -272,3 +273,15 @@ async def test_run_stops_when_the_event_is_set() -> None:
     stop.set()
     await asyncio.wait_for(task, timeout=2)
     assert len(await stream_signals(redis)) == 1
+
+
+async def test_restarted_collector_does_not_republish() -> None:
+    redis = FakeAsyncRedis()
+    loki = FakeLoki(loki_ok((LABELS, [(NOW_NS - 5_000_000_000, ERR)])))
+    first = make(loki, redis, state=CollectorState(redis, "loki"))
+    assert await first.poll_once() == 1
+    restarted = make(loki, redis, state=CollectorState(redis, "loki"))
+    assert await restarted.poll_once() == 0
+    assert len(await stream_signals(redis)) == 1
+    restart_start = int(loki.requests[-1].url.params["start"])
+    assert restart_start == NOW_NS - 5_000_000_000 - 10 * 1_000_000_000

@@ -11,6 +11,7 @@ import pytest
 from fakeredis import FakeAsyncRedis
 
 from inframind.common import stream_keys
+from inframind.common.collector_state import CollectorState
 from inframind.common.graph_update import GraphUpdate
 from inframind.common.signal import Severity, Signal, SignalType, Source
 from inframind.ingestion.jaeger import JaegerCollector, trace_to_outputs
@@ -361,3 +362,17 @@ async def test_run_stops_when_the_event_is_set() -> None:
     stop.set()
     await asyncio.wait_for(task, timeout=2)
     assert len(await read_updates(redis)) == 1
+
+
+async def test_restarted_collector_does_not_republish() -> None:
+    redis = FakeAsyncRedis()
+    jaeger = FakeJaeger(["frontend"], {"frontend": [GOOD_TRACE, ERR_TRACE]})
+    first = make(jaeger, redis, state=CollectorState(redis, "jaeger"))
+    assert await first.poll_once() > 0
+    before = (await redis.xlen(stream_keys.SIGNALS), await redis.xlen(stream_keys.GRAPH_UPDATES))
+    restarted = make(jaeger, redis, state=CollectorState(redis, "jaeger"))
+    assert await restarted.poll_once() == 0
+    assert (
+        await redis.xlen(stream_keys.SIGNALS),
+        await redis.xlen(stream_keys.GRAPH_UPDATES),
+    ) == before

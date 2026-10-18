@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import hashlib
 import json
 import re
 from collections.abc import Callable
@@ -23,6 +24,7 @@ from redis.asyncio import Redis
 
 from inframind.common import stream_keys
 from inframind.common.bus import publish
+from inframind.common.collector_state import CollectorState, MemoryState, State
 from inframind.common.exceptions import BusError
 from inframind.common.logging import get_logger
 from inframind.common.signal import (
@@ -208,6 +210,7 @@ class LokiCollector:
         overlap_s: int = 10,
         limit: int = 1000,
         stream: str = stream_keys.SIGNALS,
+        state: State | None = None,
         clock: Callable[[], datetime] = utcnow,
     ) -> None:
         self._client = client
@@ -219,11 +222,19 @@ class LokiCollector:
         self._limit = limit
         self._stream = stream
         self._clock = clock
+        self._state: State = state or MemoryState()
+        self._cursor_loaded = False
         self._cursor_ns: int | None = None
-        self._seen: set[tuple[str, int, int]] = set()
 
     async def poll_once(self) -> int:
         """Query Loki once. Returns the number of signals published."""
+        if not self._cursor_loaded:
+            try:
+                self._cursor_ns = await self._state.load_cursor()
+            except BusError as e:
+                log.warning("loki_state_unavailable", error=str(e))
+                return 0
+            self._cursor_loaded = True
         now = self._clock()
         now_ns = _to_ns(now)
         start_ns = (
@@ -239,9 +250,10 @@ class LokiCollector:
         published, newest_ns, complete = await self._publish_streams(streams, now)
         if complete and newest_ns is not None:
             self._cursor_ns = max(newest_ns, self._cursor_ns or 0)
-        if self._cursor_ns is not None:
-            horizon = self._cursor_ns - self._overlap_ns
-            self._seen = {key for key in self._seen if key[1] >= horizon}
+            try:
+                await self._state.save_cursor(self._cursor_ns)
+            except BusError as e:
+                log.warning("loki_cursor_save_failed", error=str(e))
         return published
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -283,19 +295,22 @@ class LokiCollector:
                 except (IndexError, TypeError, ValueError):
                     log.debug("loki_entry_malformed")
                     continue
-                key = (labels.get("pod", ""), ts_ns, hash(line))
+                digest = hashlib.blake2b(line.encode(), digest_size=8).hexdigest()
+                key = f"{labels.get('pod', '')}:{ts_ns}:{digest}"
                 newest = ts_ns if newest is None else max(newest, ts_ns)
-                if key in self._seen:
-                    continue
-                signal = entry_to_signal(labels, str(ts_ns), line, ingested_at=now)
-                if signal is not None:
-                    try:
-                        if await publish(self._redis, signal, stream=self._stream) is not None:
-                            published += 1
-                    except BusError as e:
-                        log.warning("loki_publish_failed", error=str(e))
-                        return published, newest, False
-                self._seen.add(key)
+                try:
+                    if await self._state.is_seen(key):
+                        continue
+                    signal = entry_to_signal(labels, str(ts_ns), line, ingested_at=now)
+                    if (
+                        signal is not None
+                        and await publish(self._redis, signal, stream=self._stream) is not None
+                    ):
+                        published += 1
+                    await self._state.mark_seen(key)
+                except BusError as e:
+                    log.warning("loki_publish_failed", error=str(e))
+                    return published, newest, False
         if total >= self._limit:
             log.warning("loki_result_truncated", limit=self._limit)
         return published, newest, True
@@ -304,7 +319,9 @@ class LokiCollector:
 async def amain() -> None:
     """Run the collector until SIGINT/SIGTERM. Reads LOKI_URL, REDIS_URL, LOKI_INTERVAL_S."""
     await run_collector(
-        lambda client, redis, interval_s: LokiCollector(client, redis, interval_s=interval_s),
+        lambda client, redis, interval_s: LokiCollector(
+            client, redis, interval_s=interval_s, state=CollectorState(redis, "loki")
+        ),
         url_env="LOKI_URL",
         default_url="http://localhost:30100",
         interval_env="LOKI_INTERVAL_S",
