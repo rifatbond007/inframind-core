@@ -63,11 +63,21 @@ def evaluate(
         + ", ".join(sorted({s for i in early for s in i.services})),
     )
 
+    # P4b: the burst target joins an incident the worker opened on the first affected
+    # service (often adservice or currencyservice for a frontend burst). Incidents only
+    # grow, never merge or drop services, so checking the *latest* snapshot per id is
+    # sufficient and robust against the burst target not being the very first service.
+    latest: dict[str, Incident] = {}
+    for incident in incidents:
+        cur = latest.get(incident.id)
+        if cur is None or incident.revision > cur.revision:
+            latest[incident.id] = incident
     target = next(
-        (i for i in first.values() if i.services == [TARGET] and i.opened_at >= burst_started), None
+        (i for i in latest.values() if TARGET in i.services and i.opened_at >= burst_started),
+        None,
     )
     if target is None:
-        gone = "no incident opened for the burst target"
+        gone = "no incident absorbed the burst target"
         return [
             quiet,
             CheckResult("detected", False, gone),
@@ -83,6 +93,18 @@ def evaluate(
 
     snapshots = [i for i in incidents if i.id == target.id]
     last = max(snapshots, key=lambda i: i.revision)
+    if TARGET not in last.services:
+        # Defensive: the burst target must remain in the final snapshot's services list.
+        absorbed = CheckResult(
+            "frozen", False, f"burst target dropped from services={last.services}"
+        )
+        closed = next((i for i in snapshots if i.state == "resolved"), None)
+        resolved = (
+            CheckResult("resolved", False, "the incident never resolved")
+            if closed is None or closed.closed_at is None
+            else CheckResult("resolved", True, "resolved before target dropped")
+        )
+        return [quiet, detected, absorbed, resolved]
     frozen = _frozen_check(last.anomalies)
 
     closed = next((i for i in snapshots if i.state == "resolved"), None)
@@ -101,7 +123,7 @@ def evaluate(
 
 def target_resolved(incidents: list[Incident], burst_started: datetime) -> bool:
     """Return whether the burst target's incident has a resolved snapshot (others do not count)."""
-    ids = {i.id for i in incidents if i.services == [TARGET] and i.opened_at >= burst_started}
+    ids = {i.id for i in incidents if TARGET in i.services and i.opened_at >= burst_started}
     return any(i.id in ids and i.state == "resolved" for i in incidents)
 
 
@@ -127,20 +149,31 @@ def describe(incidents: list[Incident]) -> list[str]:
 
 
 def _frozen_check(anomalies: list[Anomaly]) -> CheckResult:
-    """The baseline must not move while the fault keeps firing (D4)."""
-    for detector in METRIC_DETECTORS:
-        mine = [a for a in anomalies if a.detector == detector]
+    """The baseline must not move while the fault keeps firing (D4; freeze is per-service).
+
+    P4b correlation absorbs more services into one incident as the fault spreads; each newly
+    affected service gets its own freeze at the moment it joins, so we group by (detector,
+    service) and only require the post-open anomalies within one (detector, service) pair to
+    share a single frozen mean.
+    """
+    groups: dict[tuple[str, str], list[Anomaly]] = {}
+    for anomaly in anomalies:
+        if anomaly.detector not in METRIC_DETECTORS:
+            continue
+        groups.setdefault((anomaly.detector, anomaly.service), []).append(anomaly)
+    for (detector, service), mine in sorted(groups.items()):
         later = mine[1:]  # the first anomaly opens the incident; the freeze applies from then on
         frozen = [a for a in later if a.attrs.get("frozen") is True]
         if len(frozen) < 2 or len(frozen) != len(later):
             continue
-        means = [float(a.attrs["mean"]) for a in frozen]
-        if max(means) - min(means) < 1e-12:
-            return CheckResult(
-                "frozen",
-                True,
-                f"{detector}: {len(frozen)} anomalies scored against one frozen baseline",
-            )
+        means = [float(a.attrs["mean"]) for a in frozen if "mean" in a.attrs]
+        if not means or max(means) - min(means) >= 1e-12:
+            continue
+        return CheckResult(
+            "frozen",
+            True,
+            f"{detector}/{service}: {len(frozen)} anomalies scored against one frozen baseline",
+        )
     return CheckResult(
         "frozen", False, "no detector fired repeatedly against a constant frozen baseline"
     )
