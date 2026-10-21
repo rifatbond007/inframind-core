@@ -256,6 +256,10 @@ observe-fault: ## watch the ingestion paths during one chaos fault: make observe
 smoke-detection: ## verify the P4 gate live: a burst becomes one incident, baselines freeze, it resolves (~7 min, needs `make up`)
 	$(PY) testbed/smoke_detection.py
 
+.PHONY: smoke-rca
+smoke-rca: ## verify the P5 RCA unit tests: graph + walk + PageRank + worker (no Redis, fast)
+	$(PYTEST) tests/unit/rca/ -q
+
 .PHONY: smoke-ingestion
 smoke-ingestion: ## verify the P3 gate live: API + 3 collectors + a real alert (needs `make up`, port 8080 free)
 	$(PY) testbed/smoke_ingestion.py

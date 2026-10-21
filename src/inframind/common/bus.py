@@ -13,9 +13,9 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Callable
-from typing import Any
+from typing import Any, TypeVar
 
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from redis import exceptions as redis_exc
 from redis.asyncio import Redis
 
@@ -33,6 +33,8 @@ DEFAULT_MAXLEN = 100_000
 DEFAULT_DEDUP_TTL_S = 24 * 3600
 
 Handler = Callable[[Signal], Awaitable[None]]
+Model = TypeVar("Model", bound=BaseModel)
+ModelHandler = Callable[[Any], Awaitable[None]]
 
 
 async def publish(
@@ -104,16 +106,46 @@ async def publish_incident(
     return str(entry_id.decode() if isinstance(entry_id, bytes) else entry_id)
 
 
-class SignalConsumer:
-    """Reads `Signal`s from a stream through a consumer group, exactly-once-per-id per group."""
+def _dedup_identity(model: BaseModel) -> str:
+    """The stable identity a dedup key is built from.
+
+    Every wire model in `common/` carries an `id` (`Signal`, `Incident`). `GraphUpdate` has no
+    id — it is a sampled call edge, so `caller|callee|observed_at` is what makes a redelivery
+    recognisable as a duplicate.
+    """
+    ident = getattr(model, "id", None)
+    if isinstance(ident, str):
+        return ident
+    observed = getattr(model, "observed_at", None)
+    if observed is not None:
+        return (
+            f"{getattr(model, 'caller', '')}|{getattr(model, 'callee', '')}|{observed.isoformat()}"
+        )
+    return ""
+
+
+class TypedStreamConsumer:
+    """Reads a stream of typed pydantic models through a consumer group.
+
+    Exactly-once-per-id per group, the same contract the original `SignalConsumer` had: reclaim
+    stale pending entries, read new, dedup by the model's identity key (written after the
+    handler succeeds, before the ACK), ACK poison messages so they cannot block the stream, and
+    leave handler errors pending for redelivery.
+
+    This is what lets the RCA worker read `stream:graph-updates` (`GraphUpdate`) and
+    `stream:incidents` (`Incident`) with the same at-least-once guarantees as
+    `stream:signals` (`Signal`) — D21's single-writer / single-reader contract needs exactly
+    this for the graph stream.
+    """
 
     def __init__(
         self,
         client: Redis,
         group: str,
         consumer: str,
+        model: type[Model],
         *,
-        stream: str = stream_keys.SIGNALS,
+        stream: str,
         batch: int = 100,
         block_ms: int = 1000,
         reclaim_idle_ms: int = 30_000,
@@ -123,6 +155,7 @@ class SignalConsumer:
         self._client = client
         self._group = group
         self._consumer = consumer
+        self._model = model
         self._stream = stream
         self._batch = batch
         self._block_ms = block_ms
@@ -130,8 +163,8 @@ class SignalConsumer:
         self._dedup_ttl_s = dedup_ttl_s
         self._start_id = start_id
 
-    def _dedup_key(self, signal_id: str) -> str:
-        return f"dedup:{self._stream}:{self._group}:{signal_id}"
+    def _dedup_key(self, identity: str) -> str:
+        return f"dedup:{self._stream}:{self._group}:{identity}"
 
     async def ensure_group(self) -> None:
         """Create the group (and the stream) if absent, at `start_id` (`"$"` = new entries only)."""
@@ -143,7 +176,7 @@ class SignalConsumer:
             if "BUSYGROUP" not in str(e):
                 raise BusError(f"cannot create group {self._group}: {e}") from e
 
-    async def poll_once(self, handler: Handler) -> int:
+    async def poll_once(self, handler: ModelHandler) -> int:
         """Reclaim stale pending entries, then read one batch. Returns entries handled.
 
         A handler exception leaves the entry pending for redelivery; it is logged, not raised.
@@ -159,7 +192,7 @@ class SignalConsumer:
                 handled += 1
         return handled
 
-    async def run(self, handler: Handler, stop: asyncio.Event) -> None:
+    async def run(self, handler: ModelHandler, stop: asyncio.Event) -> None:
         """Poll until `stop` is set. Bus errors are logged and retried after a short pause."""
         await self.ensure_group()
         while not stop.is_set():
@@ -188,25 +221,61 @@ class SignalConsumer:
         )
         return [entry for _, entries in resp for entry in entries]
 
-    async def _process(self, entry_id: Any, fields: dict[Any, Any], handler: Handler) -> bool:
+    async def _process(self, entry_id: Any, fields: dict[Any, Any], handler: ModelHandler) -> bool:
         raw: Any = fields.get(_FIELD) if _FIELD in fields else fields.get(_FIELD.encode())
         try:
-            signal = Signal.model_validate_json(raw)
+            model = self._model.model_validate_json(raw)
         except (ValidationError, TypeError, ValueError) as e:
             log.warning(
-                "signal_poison_acked", stream=self._stream, entry=str(entry_id), error=str(e)
+                "stream_entry_poison_acked",
+                stream=self._stream,
+                entry=str(entry_id),
+                model=self._model.__name__,
+                error=str(e),
             )
             await self._client.xack(self._stream, self._group, entry_id)
             return False
-        if await self._client.exists(self._dedup_key(signal.id)):
-            log.debug("signal_duplicate_skipped", signal_id=signal.id)
+        identity = _dedup_identity(model)
+        if identity and await self._client.exists(self._dedup_key(identity)):
+            log.debug("stream_entry_duplicate_skipped", stream=self._stream, identity=identity)
             await self._client.xack(self._stream, self._group, entry_id)
             return False
         try:
-            await handler(signal)
+            await handler(model)
         except Exception as e:  # handler boundary: log, leave pending, keep the loop alive
-            log.error("signal_handler_failed", signal_id=signal.id, error=str(e))
+            log.error("stream_handler_failed", stream=self._stream, identity=identity, error=str(e))
             return False
-        await self._client.set(self._dedup_key(signal.id), 1, ex=self._dedup_ttl_s)
+        if identity:
+            await self._client.set(self._dedup_key(identity), 1, ex=self._dedup_ttl_s)
         await self._client.xack(self._stream, self._group, entry_id)
         return True
+
+
+class SignalConsumer(TypedStreamConsumer):
+    """Reads `Signal`s from a stream through a consumer group, exactly-once-per-id per group."""
+
+    def __init__(
+        self,
+        client: Redis,
+        group: str,
+        consumer: str,
+        *,
+        stream: str = stream_keys.SIGNALS,
+        batch: int = 100,
+        block_ms: int = 1000,
+        reclaim_idle_ms: int = 30_000,
+        dedup_ttl_s: int = DEFAULT_DEDUP_TTL_S,
+        start_id: str = "0",
+    ) -> None:
+        super().__init__(
+            client,
+            group,
+            consumer,
+            Signal,
+            stream=stream,
+            batch=batch,
+            block_ms=block_ms,
+            reclaim_idle_ms=reclaim_idle_ms,
+            dedup_ttl_s=dedup_ttl_s,
+            start_id=start_id,
+        )

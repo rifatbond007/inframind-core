@@ -8,13 +8,17 @@ values, tuned on the dev split in P7 (D6) and never on the test split.
 
 from __future__ import annotations
 
-import dataclasses
-import os
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, TypeVar, get_type_hints
+from typing import Literal, TypeVar
+
+from inframind.common.config import _seconds, load_prefixed
 
 T = TypeVar("T")
+
+# `load_prefixed`, `_cast` and `_seconds` now live in `common/config.py` so the `rca` layer can
+# use them without importing `detection` (module DAG). They are re-exported here because the
+# detection tests and the repo-metadata test import them from this module.
 
 
 @dataclass(frozen=True)
@@ -87,40 +91,6 @@ class LatencyParams:
     min_samples: int = 10
 
 
-def _cast(hint: type, raw: str) -> object:
-    if hint is bool:
-        lowered = raw.strip().lower()
-        if lowered in ("true", "1"):
-            return True
-        if lowered in ("false", "0"):
-            return False
-        raise ValueError(f"{raw!r} is not a boolean (use true/false/1/0)")
-    return hint(raw)
-
-
-def load_prefixed(cls: type[T], prefix: str, env: Mapping[str, str] | None = None) -> T:
-    """Build dataclass `cls` from its defaults, overridden by `<PREFIX>_<FIELD>` variables.
-
-    Raises:
-        ValueError: an override is set but cannot be cast to the field's type; the message
-            names the environment variable.
-    """
-    source = os.environ if env is None else env
-    hints = get_type_hints(cls)
-    overrides: dict[str, object] = {}
-    for field in dataclasses.fields(cls):  # type: ignore[arg-type]
-        name = f"{prefix}_{field.name.upper()}"
-        if name not in source:
-            continue
-        try:
-            overrides[field.name] = _cast(hints[field.name], source[name])
-        except ValueError as e:
-            raise ValueError(
-                f"{name}={source[name]!r} is not a valid {hints[field.name].__name__}"
-            ) from e
-    return cls(**overrides)
-
-
 def load_params(cls: type[T], detector: str, env: Mapping[str, str] | None = None) -> T:
     """Build `cls` from its defaults, overridden by `INFRAMIND_DETECTION_<DETECTOR>_<FIELD>`.
 
@@ -129,16 +99,6 @@ def load_params(cls: type[T], detector: str, env: Mapping[str, str] | None = Non
             names the environment variable.
     """
     return load_prefixed(cls, f"INFRAMIND_DETECTION_{detector.upper()}", env)
-
-
-def _seconds(name: str, default: float, env: Mapping[str, str] | None) -> float:
-    source = os.environ if env is None else env
-    if name not in source:
-        return default
-    try:
-        return float(source[name])
-    except ValueError as e:
-        raise ValueError(f"{name}={source[name]!r} is not a number of seconds") from e
 
 
 def freeze_window_s(env: Mapping[str, str] | None = None) -> float:
