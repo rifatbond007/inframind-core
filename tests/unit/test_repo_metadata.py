@@ -63,6 +63,33 @@ def test_env_example_documents_the_collector_and_api_keys() -> None:
     assert env["INFRAMIND_ALERT_WEBHOOK_SECRET"] == ""
 
 
+def test_env_example_documents_the_storage_and_alerting_keys() -> None:
+    """Every P6 env key the config loaders read is present in the template.
+
+    `load_storage_params` and `load_alerting_params` both go through `load_prefixed`, so a
+    missing key silently falls back to the dataclass default — this test is what stops a
+    typo in a prefix from going unnoticed until someone reads the README.
+    """
+    env = _env_example()
+    for key in (
+        "POSTGRES_URL",
+        "INFRAMIND_STORAGE_POOL_MIN_SIZE",
+        "INFRAMIND_STORAGE_POOL_MAX_SIZE",
+        "INFRAMIND_STORAGE_COMMAND_TIMEOUT_S",
+        "INFRAMIND_STORAGE_MAX_PAGE_SIZE",
+        "INFRAMIND_STORAGE_DEFAULT_PAGE_SIZE",
+        "INFRAMIND_EVAL_SCENARIO_ID",
+        "INFRAMIND_ALERTING_DEDUP_WINDOW_S",
+        "INFRAMIND_ALERTING_CONSOLE_ENABLED",
+        "INFRAMIND_ALERTING_WEBHOOK_URL",
+        "INFRAMIND_ALERTING_WEBHOOK_TIMEOUT_S",
+    ):
+        assert key in env, key
+    # Secrets stay empty in the template.
+    assert env["INFRAMIND_ALERTING_WEBHOOK_URL"] == ""
+    assert env["INFRAMIND_EVAL_SCENARIO_ID"] == ""
+
+
 def test_pyproject_homepage_matches_git_origin_name() -> None:
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert meta["project"]["urls"]["Homepage"].endswith("/inframind-core")

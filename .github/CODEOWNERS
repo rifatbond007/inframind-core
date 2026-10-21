@@ -21,11 +21,13 @@
 # LLM explainer (Rifat, from P5b onward)
 /src/inframind/llm/       @rifatbond007
 
-# RCA, alerting, storage, api (Prome)
+# RCA (Prome)
 /src/inframind/rca/       @promerayhan
-/src/inframind/alerting/  @promerayhan
-/src/inframind/storage/   @promerayhan
-/src/inframind/api/       @promerayhan
+
+# Alerting, storage, api (Rifat on dev-rifat from P6 onward; Prome on paper)
+/src/inframind/alerting/  @rifatbond007
+/src/inframind/storage/   @rifatbond007
+/src/inframind/api/       @rifatbond007
 /evaluation/              @rifatbond007
 
 # Docs + paper — all three

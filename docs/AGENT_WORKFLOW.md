@@ -94,7 +94,7 @@ agent; `docs-writer` updates docs whenever a contract changes.
 | `correlation-engineer` | Moneem | `signal-schema` | P4b |
 | `rca-engineer` | Prome | `rca-scoring` | P5 |
 | `llm-explainer` | Rifat | `llm-evidence-explainer` | P5b |
-| `alerting-storage-engineer` | Prome | `signal-schema` | P6 (alerting + storage + API) |
+| `alerting-storage-engineer` | Prome (Rifat on `dev-rifat` from P6 onward) | `signal-schema` | P6 (alerting + storage + API) |
 | `devops-packager` | Rifat | `helm-packaging` | P8 |
 | `test-writer` | owner of the change | `python-standards` | every |
 | `code-reviewer` | reviewer | `commit-protocol` | every PR |
@@ -127,6 +127,7 @@ Files: `.claude/agents/<category>/<name>.md`.
 | `add-collector` | [`04-add-collector.md`](standards/04-add-collector.md) |
 | `add-detector` | [`05-add-detector.md`](standards/05-add-detector.md) |
 | `rca-scoring` | [`06-rca-scoring.md`](standards/06-rca-scoring.md) |
+| `alerting-storage` | [`06b-storage-and-alerting.md`](standards/06b-storage-and-alerting.md) |
 | `llm-evidence-explainer` | [`07-llm-explainer.md`](standards/07-llm-explainer.md) |
 | `testbed-ops` | [`09-testbed-ops.md`](standards/09-testbed-ops.md) |
 | `fault-scenario`, `run-evaluation` | [`10-evaluation.md`](standards/10-evaluation.md) |
@@ -137,9 +138,9 @@ Files: `.claude/agents/<category>/<name>.md`.
 
 | Branch | Commits from |
 |---|---|
-| `dev-rifat` | `testbed-engineer`, `llm-explainer`, `devops-packager`, `evaluation-engineer` |
+| `dev-rifat` | `testbed-engineer`, `llm-explainer`, `devops-packager`, `evaluation-engineer`, `alerting-storage-engineer` (P6 only, by user direction) |
 | `dev-moneem` | `ingestion-engineer`, `detection-engineer`, `correlation-engineer` |
-| `dev-prome` | `rca-engineer`, `alerting-storage-engineer`, `results-analyst` |
+| `dev-prome` | `rca-engineer`, `results-analyst` |
 | `dev` | integration PRs from the three branches above |
 | `main` | milestone PRs from `dev` only |
 
