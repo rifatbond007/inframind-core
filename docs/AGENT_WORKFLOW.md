@@ -93,7 +93,7 @@ agent; `docs-writer` updates docs whenever a contract changes.
 | `detection-engineer` | Moneem | `add-detector` | P4 |
 | `correlation-engineer` | Moneem | `signal-schema` | P4b |
 | `rca-engineer` | Prome | `rca-scoring` | P5 |
-| `llm-explainer` | Prome | `llm-evidence-explainer` | P5b |
+| `llm-explainer` | Rifat | `llm-evidence-explainer` | P5b |
 | `alerting-storage-engineer` | Prome | `signal-schema` | P6 (alerting + storage + API) |
 | `devops-packager` | Rifat | `helm-packaging` | P8 |
 | `test-writer` | owner of the change | `python-standards` | every |
@@ -137,9 +137,9 @@ Files: `.claude/agents/<category>/<name>.md`.
 
 | Branch | Commits from |
 |---|---|
-| `dev-rifat` | `testbed-engineer`, `devops-packager`, `evaluation-engineer` |
+| `dev-rifat` | `testbed-engineer`, `llm-explainer`, `devops-packager`, `evaluation-engineer` |
 | `dev-moneem` | `ingestion-engineer`, `detection-engineer`, `correlation-engineer` |
-| `dev-prome` | `rca-engineer`, `llm-explainer`, `alerting-storage-engineer`, `results-analyst` |
+| `dev-prome` | `rca-engineer`, `alerting-storage-engineer`, `results-analyst` |
 | `dev` | integration PRs from the three branches above |
 | `main` | milestone PRs from `dev` only |
 
