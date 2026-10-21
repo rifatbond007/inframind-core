@@ -16,6 +16,9 @@ WORKDIR /build
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
 RUN apt-get update \
+ # hadolint ignore=DL3008: build-essential is a meta-package whose version tracks the Debian
+ # release, not a pin we control. Pinning it would break on every base-image bump and would
+ # not make the build any more reproducible -- the real inputs are pinned by PY_VERSION.
  && apt-get install -y --no-install-recommends build-essential \
  && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml README.md ./
