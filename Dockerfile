@@ -15,6 +15,10 @@ FROM python:${PY_VERSION}-slim AS builder
 WORKDIR /build
 ENV PIP_NO_CACHE_DIR=1 \
     PIP_DISABLE_PIP_VERSION_CHECK=1
+# build-essential is a meta-package whose version tracks the Debian release rather than
+# anything we control. Pinning it would break on every base-image bump without making the
+# build any more reproducible -- PY_VERSION is the real pin.
+# hadolint ignore=DL3008
 RUN apt-get update \
  # hadolint ignore=DL3008: build-essential is a meta-package whose version tracks the Debian
  # release, not a pin we control. Pinning it would break on every base-image bump and would
