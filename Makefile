@@ -281,14 +281,34 @@ smoke-testbed: ## verify the P1 → P2 gate (6 checks; see testbed/README.md §4
 # testbed-full: down kind obs boutique chaos ## 32 GB profile: full replicas + retention
 # 	@echo "Full testbed profile up. See testbed/README.md §7."
 
-# --- evaluation / paper (placeholders for later) ---
-.PHONY: eval
-eval: ## run a single evaluation scenario (not implemented yet — Phase P7)
-	@echo "eval target not implemented yet. See docs/PROGRESS.md (Phase P7)."
+# --- evaluation / paper (P7) ---
+# `make eval`, `eval-all`, `eval-soak`, and `eval-ablation` all run on **replay**
+# by default (see docs/standards/10-evaluation.md §10.8). The replay path
+# needs no docker daemon and runs green on this box; `--live` reaches for
+# kubectl via `runner/live.py` and is intentionally not set by any target.
+#
+# All targets default to the dev set. `eval-all` consumes the test set once
+# and the result is the paper's source of truth (D6). Soak measures false-positive
+# rate on a fault-free window — also on the dev set.
+#
+# Override knobs (all via `INFRAMIND_EVAL_*` env keys, see standards 10 §10.7):
+#   make eval REPEATS=3 ALLOW_BLOCKED=1     # make-var shortcuts
+#   INFRAMIND_EVAL_ALLOW_OVERWRITE=1 make eval-all
+.PHONY: eval eval-all eval-soak eval-ablation eval-live paper
+eval: ## replay the dev set through InfraMind + 6 baselines (default repeats=5, INFRAMIND_EVAL_* honoured)
+	$(PY) -m inframind.evaluation.runner.main --set dev
 
-.PHONY: eval-all
-eval-all: ## run the full evaluation matrix (not implemented yet — Phase P7)
-	@echo "eval-all target not implemented yet. See docs/PROGRESS.md (Phase P7)."
+eval-all: ## replay dev + test. The scored-once run (D6 source of truth).
+	$(PY) -m inframind.evaluation.runner.main --set all
+
+eval-soak: ## replay a fault-free window on the dev set to measure the false-positive rate (D6).
+	$(PY) -m inframind.evaluation.runner.main --set dev --soak
+
+eval-ablation: ## the four locked ablations on the dev set (asserts the D1 no-llm invariant).
+	$(PY) -m inframind.evaluation.runner.main --set dev --ablation
+
+eval-live: ## typed-by-a-human live path against kind-inframind. Refuses other contexts. No Make target sets this.
+	$(PY) -m inframind.evaluation.runner.main --set dev --live
 
 .PHONY: paper
 paper: ## build the paper artifact (not implemented yet — Phase P9)

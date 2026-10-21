@@ -1,0 +1,31 @@
+# block_status: d2_chaos_runtime_docker
+#
+# Dev split scenario 06 — StressChaos latency-inject on emailservice.
+# BLOCKED: same D2-Chaos-runtime limitation as scenario 04. Note emailservice emits no
+# traces, so even once unblocked this is a metrics-only scenario.
+scenario_id: dev-stresschaos-06-emailservice-latency-inject
+set: dev
+seed: 1006
+fault_type: latency_inject
+target_service: emailservice
+target_namespace: boutique
+duration_s: 240
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: emailservice
+expected_affected_services:
+  - emailservice
+  - checkout
+chaos:
+  kind: StressChaos
+  spec:
+    action: stress-latency
+    mode: one
+    selector:
+      label: app
+      value: emailservice
+metrics_to_assert:
+  - http_request_duration_seconds_bucket
+repeats: 5
+status: blocked
+block_reason: d2_chaos_runtime_docker

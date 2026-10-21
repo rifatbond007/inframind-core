@@ -1,0 +1,34 @@
+# block_status: d2_chaos_runtime_docker
+#
+# Dev split scenario 04 — StressChaos cpu-stress on cartservice.
+# BLOCKED: StressChaos under the `docker` runtime does not inject against a containerd
+# node. Resolving D2-Chaos-runtime (Chaos Mesh daemon vs. docker sidecar) is a testbed
+# decision, not a P7 code change. The runner refuses this scenario until it is resolved.
+scenario_id: dev-stresschaos-04-cartservice-cpu-stress
+set: dev
+seed: 1004
+fault_type: cpu_stress
+target_service: cartservice
+target_namespace: boutique
+duration_s: 240
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: cartservice
+expected_affected_services:
+  - cartservice
+  - front-end
+  - checkout
+chaos:
+  kind: StressChaos
+  spec:
+    action: stress-cpu
+    mode: one
+    selector:
+      label: app
+      value: cartservice
+metrics_to_assert:
+  - container_cpu_usage_seconds_total
+  - http_request_duration_seconds_bucket
+repeats: 5
+status: blocked
+block_reason: d2_chaos_runtime_docker

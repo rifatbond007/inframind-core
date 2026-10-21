@@ -90,6 +90,77 @@ def test_env_example_documents_the_storage_and_alerting_keys() -> None:
     assert env["INFRAMIND_EVAL_SCENARIO_ID"] == ""
 
 
+def test_env_example_documents_the_p7_evaluation_keys() -> None:
+    """Every `INFRAMIND_EVAL_*` key `EvalParams` reads is present in the template.
+
+    `load_eval_params` goes through `load_prefixed`, so a missing key silently falls back
+    to the dataclass default. This test is what stops a typo in the prefix from going
+    unnoticed until someone re-runs the matrix.
+    """
+    env = _env_example()
+    for key in (
+        "INFRAMIND_EVAL_SCENARIO_SET",
+        "INFRAMIND_EVAL_REPEATS",
+        "INFRAMIND_EVAL_FIXTURE_DIR",
+        "INFRAMIND_EVAL_RESULTS_DIR",
+        "INFRAMIND_EVAL_DETECT_WINDOW_S",
+        "INFRAMIND_EVAL_ALLOW_BLOCKED",
+        "INFRAMIND_EVAL_ALLOW_OVERWRITE",
+        "INFRAMIND_EVAL_SEED",
+    ):
+        assert key in env, key
+    # The two escape hatches and the seed override stay off/empty in the template: an eval
+    # run must be a deliberate act, and the seed comes from the scenario YAML by default.
+    assert env["INFRAMIND_EVAL_ALLOW_BLOCKED"] == "false"
+    assert env["INFRAMIND_EVAL_ALLOW_OVERWRITE"] == "false"
+    assert env["INFRAMIND_EVAL_SEED"] == ""
+
+
+def test_eval_config_fields_are_all_documented_in_standard_10() -> None:
+    """Standard 10 §10.7 lists every `INFRAMIND_EVAL_*` key the loader reads.
+
+    PUKU.md requires `.env.example` and the standards to agree; this is the check that
+    keeps the eval table from drifting away from the loader. `seed_override` is spelled
+    `INFRAMIND_EVAL_SEED` on the wire — `load_eval_params` maps it explicitly — so the
+    key list is written out rather than derived from the field names.
+    """
+    from inframind.evaluation.config import EvalParams, load_eval_params
+
+    standard = _read("docs/standards/10-evaluation.md")
+    # Every env-reachable key, minus the two that are handled outside `load_prefixed`
+    # (`SEED` is merged explicitly; `SCENARIO_ID` is stamped by the live runner, not read
+    # as a param) and minus `extra`, which is the catch-all for unrecognised keys.
+    explicit = {"INFRAMIND_EVAL_SEED"}
+    for key in explicit:
+        assert f"`{key}`" in standard, f"standard 10 should document {key}"
+
+    # Every other key the loader forwards must appear under its own name in the standard.
+    for key in (
+        "INFRAMIND_EVAL_SCENARIO_SET",
+        "INFRAMIND_EVAL_REPEATS",
+        "INFRAMIND_EVAL_FIXTURE_DIR",
+        "INFRAMIND_EVAL_RESULTS_DIR",
+        "INFRAMIND_EVAL_DETECT_WINDOW_S",
+        "INFRAMIND_EVAL_ALLOW_BLOCKED",
+        "INFRAMIND_EVAL_ALLOW_OVERWRITE",
+    ):
+        assert f"`{key}`" in standard, f"standard 10 should document {key}"
+
+    # And the params loader must actually read them (a key in the standard that the
+    # loader ignores is the same silent-default bug, one layer over).
+    params = load_eval_params(
+        {
+            "INFRAMIND_EVAL_REPEATS": "7",
+            "INFRAMIND_EVAL_SEED": "4242",
+            "INFRAMIND_EVAL_ALLOW_BLOCKED": "true",
+        }
+    )
+    assert params.repeats == 7
+    assert params.seed_override == 4242
+    assert params.allow_blocked is True
+    assert EvalParams().repeats == 5  # the documented D6 default
+
+
 def test_pyproject_homepage_matches_git_origin_name() -> None:
     meta = tomllib.loads((ROOT / "pyproject.toml").read_text())
     assert meta["project"]["urls"]["Homepage"].endswith("/inframind-core")

@@ -78,6 +78,65 @@ only — final numbers come from the held-out test set.
 
 These are the comparison set. Adding or removing a baseline is a D-change.
 
+## D7-Replay. Replay is the reproducibility mechanism
+
+A scenario run is reproducible from `(scenario_id, seed)` because the pipeline is
+**signal-time-driven**: detection, correlation, and ranking consume the `Signal` stream's
+`ts` values, not the wall clock. `evaluation/runner/replay.py` re-feeds a fixture's
+`signals.ndjson` through detection → correlation → ranking and yields a `ResultRow` that
+is byte-identical across runs on the same fixture.
+
+**Why:** the bus, the collectors, the freeze coordination, and the chronograph all read
+signal time. A fixture pins that signal time, so a replay pins the whole pipeline's
+output. The replay is the **only** way to run the harness on a dev box without docker
+(it is what `make eval` runs); cluster-backed live runs become a way to *produce*
+fixtures, not to score them.
+
+**Alternatives:**
+
+- Wall-clock regression (rely on the timestamp at replay time): rejected because it cannot
+  be made deterministic across hosts.
+- Mocking the pipeline: rejected because it does not exercise the production path.
+
+**Trigger to revisit:** if any future code path inside detection, correlation, or ranking
+starts reading wall time, this decision breaks and a fixture cannot reproduce — that is
+itself the bug. The `tests/unit/test_repo_metadata.py` `INFRAMIND_*` env-key list and the
+P7 replay integration test are the mechanical reminders.
+
+## D26-Chaos-runtime-blocked. Stress/Network chaos is blocked; PodChaos is the live path
+
+The D2-Chaos-runtime proposal (containerd runtime in `testbed/helm-values/chaos-mesh.yaml`)
+remains pending user approval, a `make chaos` re-run, and a `make smoke-testbed` check
+that includes a StressChaos injection. Until it lands, StressChaos / NetworkChaos do not
+inject against the containerd node — they raise `expected docker:// but got container`.
+
+**Why this PR records the blocker:**
+
+- 6 of the 14 locked scenarios (D6) require StressChaos or NetworkChaos. Leaving them in
+  the scenarios folder without a marker would let a future run silently score them as
+  zero (a fabricated number).
+- P7 makes the blocker an artefact: every blocked scenario file carries
+  `# block_status: d2_chaos_runtime_docker` and `status: blocked`. The harness refuses
+  such a scenario unless `INFRAMIND_EVAL_ALLOW_BLOCKED=1`, in which case it writes
+  rows with `blocked=True` and a *non-fabricated* `detected=False`. The runner's exit
+  code is 3 on a refused blocked run.
+- The blocked scenarios are P7-mandatory once D2-Chaos-runtime lands; P7's seed corpus
+  keeps them written and the tests keep the blocked marker asserted.
+
+**Alternatives:**
+
+- Delete the blocked scenarios from the repo until the runtime lands: rejected because
+  D6's "≥12 distinct scenarios" promise then becomes 8 scenarios in dev and 4 in test,
+  which would itself break the locked coverage. Writing the blocker preserves the locked
+  spec.
+- Score blocked scenarios as zero today: rejected (PUKU.md: never invent a number).
+
+**Trigger to revisit:** D2-Chaos-runtime is approved and `make smoke-testbed` confirms
+all six blocked scenarios now replay end-to-end. The harness then drops the
+`d2_chaos_runtime_docker` block reason from those files and the 6 become runnable.
+
+**Cross-ref:** `docs/standards/10-evaluation.md` §10.3; `tests/integration/test_evaluation_replay.py::test_blocked_scenarios_are_all_stress_or_network_chaos`.
+
 ## D9. LLM access is gated by redaction and a local fallback
 
 Before any text leaves the process:
@@ -250,7 +309,11 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 
 - **P4-detection-rulings** · 2026-10-19 · Where the P4 design departs from the earlier standards and agents (full table with evidence: `docs/superpowers/specs/2026-10-19-p4-detection-design.md`): (1) frozen detectors still **score** but do not learn; (2) `freeze(service, ts)` per service; (3) Z-score window is 60 samples, `min_samples=10`; (4) `Anomaly` and the stream `Incident` live in `common/` (DAG), `detection/anomaly.py` re-exports; (5) per-metric absolute and relative std floors replace `std or 1e-9`; (6) state is per `(service, metric)` and counters are scored on their increase; (7) incident states are the surface-map set, "updating" is a `revision` bump; (8) the freeze is a renewable lease of `BASELINE_FREEZE_WINDOW`; (9) P4 ships a minimal per-service tracker because D4 needs incident state; (10) the log detector is a count spike, not a ratio (collectors send no totals); (11) env scheme `INFRAMIND_DETECTION_<DETECTOR>_<PARAM>` plus the existing `BASELINE_FREEZE_WINDOW`; (12) windows and decay use the signal's `ts`, not the wall clock; (13) resource gauges and counters alert **upward only**. · Why: each was a contradiction between the standard, the agent files, the DAG or the data; 11 and 12 follow D6; 5 and 13 are measured on 6244 recorded signals (0.8% false fires on quiet CPU with the 1e-9 floor, 6 of 6 metric anomalies were CPU drops when traffic stopped). · Alternatives: keep the standard's text (a frozen detector that goes silent, a two-sided gauge that alerts on idleness). · Status: applied in code, standards 01/05/10, `surface-map.md` and the detection/correlation agents; no D-number changed, so no supervisor sign-off is required.
 
-- **D2-Chaos-runtime (PROPOSED, not applied)** · 2026-10-19 · Run chaos-daemon with `chaosDaemon.runtime: containerd` and `socketPath: /run/containerd/containerd.sock`, and drop the `/var/run/docker.sock` `extraMounts` workaround, in `testbed/helm-values/chaos-mesh.yaml` and `testbed/kind/cluster.yaml`. · Why: with `runtime=docker` against a containerd node the daemon rejects every container id (`expected docker:// but got container`), so StressChaos and NetworkChaos never inject; only PodChaos (API-level) works, and the P1 smoke gate tests only pod-kill. NetworkChaos also needs the host kernel modules `sch_netem`, `ip_set_hash_ipport`, `ip_set_hash_net`. · Alternatives: keep the docker shim and rewrite container ids (unsupported). · Status: proposed; needs user approval, a `make chaos` re-run, and a `make smoke-testbed` check that includes a StressChaos injection.
+- **D2-Chaos-runtime (PROPOSED, not applied)** · 2026-10-19 · Run chaos-daemon with `chaosDaemon.runtime: containerd` and `socketPath: /run/containerd/containerd.sock`, and drop the `/var/run/docker.sock` `extraMounts` workaround, in `testbed/helm-values/chaos-mesh.yaml` and `testbed/kind/cluster.yaml`. · Why: with `runtime=docker` against a containerd node the daemon rejects every container id (`expected docker:// but got container`), so StressChaos and NetworkChaos never inject; only PodChaos (API-level) works, and the P1 smoke gate tests only pod-kill. NetworkChaos also needs the host kernel modules `sch_netem`, `ip_set_hash_ipport`, `ip_set_hash_net`. · Alternatives: keep the docker shim and rewrite container ids (unsupported). · Status: proposed; needs user approval, a `make chaos` re-run, and a `make smoke-testbed` check that includes a StressChaos injection. **Carried into P7 as [D26-Chaos-runtime-blocked](#d26-chaos-runtime-blocked-stressnetwork-chaos-is-blocked-podchaos-is-the-live-path): the 6 affected scenarios now ship written and marked `blocked`, and the harness refuses to score them.**
+
+- **D7-Replay** · 2026-10-21 · The evaluation harness's reproducibility mechanism is **signal-time replay** from an NDJSON fixture (`evaluation/fixtures/<scenario>/signals.ndjson`), not a cluster-backed re-run. `runner/replay.py` re-feeds a fixture through detection → correlation → ranking and is byte-identical across repeats. The live path (`runner/live.py`) asserts a `kind-*` kubeconfig context, refuses blocked scenarios, and ships with `run_scenario` as `NotImplementedError` pending the fixture recorder. · Why: the pipeline consumes the `Signal` stream's `ts` values end-to-end (D6 property), so pinning signal time pins the whole pipeline's output. Replay is the only path that runs green on a dev box with no docker daemon; live runs become a way to *produce* fixtures, not to score them. · Alternatives: (a) wall-clock re-runs — rejected, not reproducible across hosts. (b) mocking the pipeline — rejected, does not exercise the production path. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/10-evaluation.md` §10.2; `tests/integration/test_evaluation_replay.py`.
+
+- **D26-Chaos-runtime-blocked** · 2026-10-21 · While D2-Chaos-runtime is still pending, the 6 Stress/NetworkChaos scenarios (dev-04..07, test-04..05) ship **written and marked blocked** (`status: blocked`, `# block_status: d2_chaos_runtime_docker`). The harness refuses to run them by default (exit code 3); with `--allow-blocked` it writes rows with `blocked=True` and `detected=False`, never a fabricated accuracy. The blocked marker is asserted by a test. · Why: recording the blocker as an artefact (rather than deleting the scenarios or silently scoring them zero) preserves D6's locked "≥12 distinct scenarios" promise while honouring PUKU.md's "never invent a number". · Alternatives: (a) delete the blocked scenarios — rejected, reduces dev to 4 and test to 4 scenarios and breaks the locked coverage. (b) score them as zero — rejected, fabricated number. · Status: approved by team as a P7 deliverable; the underlying D2-Chaos-runtime runtime change is still proposed. Cross-ref: `docs/standards/10-evaluation.md` §10.3; `test_blocked_scenarios_are_all_stress_or_network_chaos`.
 
 ### Proposed deviations from the July 2026 proposal (supervisor approval pending)
 

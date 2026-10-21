@@ -33,6 +33,7 @@ dependencies = [
     "fastapi>=0.110",
     "uvicorn>=0.29",
     "asyncpg>=0.30,<0.33",
+    "PyYAML>=6.0,<7.0",
 ]
 
 [project.optional-dependencies]

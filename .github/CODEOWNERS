@@ -28,7 +28,10 @@
 /src/inframind/alerting/  @rifatbond007
 /src/inframind/storage/   @rifatbond007
 /src/inframind/api/       @rifatbond007
-/evaluation/              @rifatbond007
+
+# Evaluation harness (Rifat, P7 per AGENT_WORKFLOW.md §4)
+/src/inframind/evaluation/ @rifatbond007
+/evaluation/               @rifatbond007
 
 # Docs + paper — all three
 /docs/        @rifatbond007 @moneem-07 @promerayhan

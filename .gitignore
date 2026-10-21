@@ -92,3 +92,8 @@ paper/build/
 *.out
 *.synctex.gz
 *.toc
+
+# --- editor / CLI session docs (not part of the project) ---
+/PUKU.md
+/AGENTS.md
+/CLAUDE.local.md

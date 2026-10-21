@@ -19,6 +19,10 @@ ALLOWED: dict[str, set[str]] = {
     "alerting": {"common", "rca", "llm"},
     "storage": {"common", "correlation", "rca"},
     "api": {"common", "storage", "alerting"},
+    # The harness measures the pipeline, so it may reach the detectors, the tracker, the
+    # graph, the ranker, and the explainer — but never the bus-facing P6 layers (alerting,
+    # storage, api), or it would be measuring the plumbing rather than the contribution.
+    "evaluation": {"common", "correlation", "detection", "rca", "llm"},
 }
 
 
