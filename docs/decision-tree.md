@@ -274,6 +274,44 @@ itself was authored with assistance from ...`).
 **Trigger to revisit:** moving to a richer authorship model (e.g. GPG-signed
 commits, SSH signing, or a different noreply attestation) is a D-change.
 
+## D27-InProcessAlertingLlm. Alerting and the LLM explainer stay in-process
+
+The Helm chart ships **four** Deployments — `api`, `ingestion`, `detection`,
+`rca` — not the seven that a stage-per-Deployment reading of `standard 11`
+section 11.2 implies. Two stages are folded into processes that already
+exist:
+
+- **Alerting** runs inside the `api` process, as `api.app`'s `AlertRouter`.
+  The Alertmanager webhook *is* the alert sink, so a separate Deployment
+  would have to be reachable from the api anyway; the router is
+  constructed there and dispatched synchronously from the webhook handler.
+- **The LLM explainer** runs inside the `rca` worker, as a synchronous
+  `llm.explain()` call between ranking and evidence bundling. D1 already
+  makes the LLM presentation-only, so there is no independent scaling axis
+  that a separate Deployment would buy.
+
+`ingestion` is a single Deployment carrying three containers (the
+prometheus, loki, and jaeger collectors) because all three poll the same
+observability-stack pods and share one failure domain, one ServiceAccount
+token, and one scheduling decision.
+
+**Why:** a Deployment is a failure domain, not a stage label. Two
+Deployments that must be co-scheduled, share a ServiceAccount, and have no
+independent scaling or failure requirement are one Deployment with extra
+configuration. The chart that ships seven would carry two pods whose failure
+is a *false* signal — a replica whose crash means nothing because its
+neighbour does the same work in the same process. That inflates the
+"pods healthy" reading of `kubectl get pods` with nodes that carry no
+information, which is the same misread the `coverage` block in
+`evaluation/report.py` exists to prevent on the numbers side.
+
+**Trigger to revisit:** a production requirement that gives either stage an
+independent lifecycle — separate LLM autoscaling because explainer latency
+is the incident-response bottleneck, or alerting backpressure because a
+slow sink must not hold an api worker — is a D-change. That requirement
+does not exist at `kind` scale, and inventing the seam before it is needed
+would be speculative.
+
 ## D-Setup. Step 0 only scaffolds the repo
 
 Step 0 (this phase) creates the module skeletons, tooling, CI, and dev compose. No functional
@@ -296,6 +334,8 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 - **D-Setup** · 2026-10-05 · Step 0 only creates skeletons and tooling; no functional code in this phase. K8s testbed lives in `make up` (Step 1). docker-compose covers only Redis and PostgreSQL. Functional code lands phase by phase per `docs/PROGRESS.md`. · Why: verifiable scaffold without violating D3/D5 prematurely. · Alternatives: full stack in Step 0 (rejected). · Status: approved by the team; supervisor follow-up in next sync.
 
 - **D21** · 2026-10-11 · The service dependency graph is a single pinned primitive called `ServiceGraph`, owned by the RCA worker (one replica), with edges `caller -> callee`, weighted by `p95_latency_ms * log(call_count)` over the last 100 samples (α = 0.1 EWMA). Cold-start seed from `RCA_GRAPH_PATH`. Live updates from the OTel / Jaeger collector over the pinned Redis stream `stream:graph-updates`. Edges age out via `GRAPH_DECAY_HALF_LIFE_S`; an edge below `GRAPH_MIN_OBSERVATIONS` is held back. Snapshot every 60 s and on `SIGTERM`; corrupt snapshot -> cold start, never a crash. · Why: the graph is consumed by the RCA walker, the PageRank baseline, the correlation severity classifier, and the LLM evidence bundler — six call sites in total. Without a pinned primitive, every consumer invents its own, and a deviation is a silent scoring bug. The single-writer / single-reader model also satisfies the D6 reproducibility contract: same `scenario_id + seed` -> same `GraphUpdate` sequence -> same in-memory graph -> same ranking. · Alternatives: (a) rebuild the graph on every incident from raw traces — rejected for hot-path latency (1–5 ms per request). (b) Reuse `stream:signals` for graph updates — rejected because `GraphUpdate` has a different shape and a different consumer lifecycle. (c) Store the live copy in Postgres — rejected because the ranker needs O(1) edge access, not a SQL round-trip. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/13-service-graph-contract.md`.
+
+- **D27-InProcessAlertingLlm** · 2026-10-21 · The Helm chart ships four Deployments (`api`, `ingestion`, `detection`, `rca`), not seven. Alerting lives in `api.app.AlertRouter`; the LLM explainer lives in `rca.worker` as a synchronous `llm.explain()` call. `ingestion` is one Deployment with three collector containers. · Why: a Deployment is a failure domain, not a stage label. Neither folded stage has an independent scaling axis (D1 makes the LLM presentation-only) nor an independent failure requirement, so separate Deployments would add two pods to `kubectl get pods` whose health carries no information — the same misread the `coverage` block prevents on the numbers side. · Alternatives: (a) ship seven Deployments as `standard 11` section 11.2 literally reads — rejected as speculative scaffolding for a requirement that does not exist at `kind` scale. (b) split the LLM into a Deployment *and* make the call asynchronous — rejected because D1 makes the summary presentation-only, so an async boundary would buy nothing and cost an extra queue. (c) run the three collectors as three Deployments — rejected because they poll the same observability pods and share a failure domain. · Status: approved by team. Trigger to revisit: independent LLM autoscaling or alerting backpressure. Cross-ref: `docs/standards/11-helm-packaging.md` sections 11.2 and 11.12.
 
 - **D22** · 2026-10-11 · `change_correlation` is the pinned algorithm for the RCA `w4` term. Source is a single in-process K8s API watch on `Deployment`, `StatefulSet`, `DaemonSet`, `ConfigMap`, `Secret`, `HorizontalPodAutoscaler` (filtered to `.spec.template`, `.data`, `.spec.replicas` respectively), scoped to `INFRAMIND_WATCH_NAMESPACES`. Captures metadata only — **no Secret values stored**. Correlation uses a 30-minute pre-window (`CHANGE_CORRELATION_PRE_WINDOW_S`) before `incident.opened_at`, with recency-weighted soft saturation, returning a float in `[0, 1]`. The `change_events` Postgres table is append-only (D20). The watcher's `Role` extends the existing read-only `Role` (section 11.5) with `secrets` `get` / `list` / `watch` only — no write verbs, no `pods/exec`. · Why: the `w4` term is named and weighted in section 6.4 but had no algorithm. Without a pinned spec, every implementation invents its own and the D6 reproducibility contract breaks at the `w4` term. The K8s API watch (not the audit log) matches the existing read-only RBAC scope with a minimal extension. · Alternatives: (a) Watch the audit log — rejected for being more privileged than needed. (b) Poll the K8s API on a timer — rejected because polling misses bursts of changes between polls. (c) Use a sidecar — rejected because it adds a new `Deployment` with its own lifecycle for a single consumer. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/14-change-correlation.md`.
 

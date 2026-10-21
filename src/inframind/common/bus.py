@@ -19,6 +19,7 @@ from pydantic import BaseModel, ValidationError
 from redis import exceptions as redis_exc
 from redis.asyncio import Redis
 
+from .. import metrics
 from . import stream_keys
 from .exceptions import BusError
 from .graph_update import GraphUpdate
@@ -61,6 +62,7 @@ async def publish(
         )
     except redis_exc.RedisError as e:
         raise BusError(f"publish to {stream} failed: {e}") from e
+    metrics.record_signal(signal.source, signal.type)
     return str(entry_id.decode() if isinstance(entry_id, bytes) else entry_id)
 
 

@@ -15,10 +15,12 @@ Two invariants hold on every call:
 
 from __future__ import annotations
 
+import time
 from collections.abc import Callable, Sequence
 
 from inframind.common.incident import Incident
 from inframind.common.logging import get_logger
+from inframind.metrics import observe_llm_call
 from inframind.rca.evidence import Candidate
 
 from .cache import SummaryCache, key_for_incident
@@ -75,11 +77,16 @@ def explain(
     cached = store.get(key)
     if cached is not None:
         logger.info("llm summary served from cache", extra={"key": key, "scenario": scenario_id})
+        # A cache hit still consumes wall-clock time in this process, but it is not an LLM
+        # call. Recording it here keeps the histogram's `_count` equal to "explain() calls",
+        # not "provider round-trips", which is the number the paper's latency column reports.
+        observe_llm_call(0.0)
         return cached, None
 
     call = _build_call(params)
     prompt = build_prompt(incident, candidates, top_k=params.top_k)
 
+    started = time.perf_counter()
     try:
         result = summarise_with_validation(
             lambda p, hint: call(prompt if hint is None else f"{prompt}\n\n{hint}"),
@@ -101,6 +108,7 @@ def explain(
         )
 
     store.set(key, result.summary)
+    observe_llm_call(time.perf_counter() - started)
     return result.summary, result
 
 

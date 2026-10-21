@@ -13,7 +13,11 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
-        exclude: ^paper/|^testbed/boutique/base/|^testbed/boutique/patches/(memory-patches|tracing)\.yaml$
+        # Helm templates under deploy/helm/*/templates/ are Go templates, not YAML — the
+        # {{ }} directives do not parse. The chart's real correctness gate is
+        # `make chart-lint` (helm lint + helm template + the D27 / no-secret guards), which
+        # CI runs as a blocking job.
+        exclude: ^paper/|^testbed/boutique/base/|^testbed/boutique/patches/(memory-patches|tracing)\.yaml$|^deploy/helm/.*/templates/
       - id: check-toml
       - id: check-merge-conflict
       - id: detect-private-key

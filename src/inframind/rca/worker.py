@@ -37,6 +37,7 @@ from inframind.common.exceptions import BusError
 from inframind.common.graph_update import GraphUpdate
 from inframind.common.incident import Incident
 from inframind.common.logging import configure_logging, get_logger
+from inframind.metrics import start_http_server as metrics_start_http_server
 
 from .change_correlation import ChangeEvent
 from .config import RCAParams, load_rca_params
@@ -225,6 +226,7 @@ def _symptom_services(incident: Incident) -> list[str]:
 async def amain() -> None:
     """Run until SIGINT/SIGTERM. Reads REDIS_URL, RCA_GRAPH_PATH, INFRAMIND_RCA_*."""
     configure_logging()
+    metrics_start_http_server(int(os.environ.get("METRICS_PORT", "9100")))
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (os_signal.SIGINT, os_signal.SIGTERM):

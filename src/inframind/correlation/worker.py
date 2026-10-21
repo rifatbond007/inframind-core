@@ -30,6 +30,7 @@ from inframind.common.logging import configure_logging, get_logger
 from inframind.common.signal import Signal, Source
 from inframind.common.time import utcnow
 from inframind.detection.engine import DetectionEngine
+from inframind.metrics import start_http_server as metrics_start_http_server
 
 from .config import load_correlation_params
 from .tracker import IncidentTracker
@@ -130,6 +131,7 @@ class CorrelationWorker:
 async def amain() -> None:
     """Run until SIGINT/SIGTERM. Reads REDIS_URL, INFRAMIND_DETECTION_*, INFRAMIND_CORRELATION_*."""
     configure_logging()
+    metrics_start_http_server(int(os.environ.get("METRICS_PORT", "9100")))
     stop = asyncio.Event()
     loop = asyncio.get_running_loop()
     for sig in (os_signal.SIGINT, os_signal.SIGTERM):

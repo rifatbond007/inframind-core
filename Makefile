@@ -313,3 +313,65 @@ eval-live: ## typed-by-a-human live path against kind-inframind. Refuses other c
 .PHONY: paper
 paper: ## build the paper artifact (not implemented yet — Phase P9)
 	@echo "paper target not implemented yet. See docs/PROGRESS.md (Phase P9)."
+
+# --- P8: packaging + deployment (standard 11) ---
+#
+# Two deployment paths, deliberately separate:
+#
+#   make image        build inframind:dev from the root Dockerfile
+#   make helm-install install the chart into kind-inframind
+#   make up-app       the whole chain: image -> load into kind -> install the chart
+#
+# `make up` (the testbed chain) is UNCHANGED. It brings up Online Boutique + the observability
+# stack + Chaos Mesh; `make up-app` layers InfraMind on top of an already-running testbed.
+# Nothing here touches `~/.kube/config` — every kubectl and helm invocation is pinned to the
+# testbed kubeconfig and the kind- context (PUKU.md hard rule).
+CHART_DIR ?= deploy/helm/inframind
+APP_NAMESPACE ?= inframind
+APP_TAG ?= 0.0.0
+
+.PHONY: image
+image: ## build the local InfraMind image (inframind:dev) from the root Dockerfile
+	docker build -t inframind:dev .
+
+.PHONY: hadolint
+hadolint: ## lint the Dockerfile (blocking at warning severity, matching CI)
+	docker run --rm -i hadolint/hadolint:v2.12.0 --failure-threshold warning < Dockerfile
+
+.PHONY: chart-lint
+chart-lint: helm-check ## helm lint + template render + the four-Deployment / no-secret guards
+	bash $(CHART_DIR)/tests/helm-lint.sh
+	helm template inframind $(CHART_DIR) > /tmp/inframind-rendered.yaml
+	@echo "chart-lint: rendered to /tmp/inframind-rendered.yaml"
+
+.PHONY: chart-package
+chart-package: helm-check ## package the chart into dist/
+	mkdir -p dist
+	helm package $(CHART_DIR) -d dist/
+
+.PHONY: image-load
+image-load: kind-check ## load inframind:dev into kind-inframind (no registry needed)
+	kind load docker-image inframind:dev --name $(TESTBED_CLUSTER_NAME)
+
+.PHONY: helm-install
+helm-install: helm-check ## install (or upgrade) the chart into kind-inframind
+	helm upgrade --install inframind $(CHART_DIR) \
+	  --kubeconfig $(TESTBED_KUBECONFIG) \
+	  --namespace $(APP_NAMESPACE) \
+	  --create-namespace \
+	  --set image.tag=$(APP_TAG) \
+	  --wait --timeout 5m
+
+.PHONY: helm-uninstall
+helm-uninstall: helm-check ## remove the chart from kind-inframind
+	helm uninstall inframind \
+	  --kubeconfig $(TESTBED_KUBECONFIG) \
+	  --namespace $(APP_NAMESPACE) || true
+
+.PHONY: up-app
+up-app: image image-load helm-install ## build the image, load it into kind, and install the chart
+
+.PHONY: app-status
+app-status: ## show the InfraMind pods and Deployments in the kind cluster
+	kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+	  -n $(APP_NAMESPACE) get deploy,pods,svc -o wide

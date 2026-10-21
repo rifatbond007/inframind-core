@@ -12,6 +12,7 @@ from collections.abc import Mapping, Sequence
 
 from inframind.common.anomaly import Anomaly
 from inframind.common.signal import Signal
+from inframind.metrics import record_anomaly as metrics_record_anomaly
 
 from .base import Detector
 from .config import (
@@ -63,4 +64,7 @@ class DetectionEngine:
         """Release expired leases, then return the anomalies every detector reports."""
         self._coordinator.expire(signal.ts)
         found = (detector.update(signal) for detector in self._detectors)
-        return [anomaly for anomaly in found if anomaly is not None]
+        anomalies = [anomaly for anomaly in found if anomaly is not None]
+        for anomaly in anomalies:
+            metrics_record_anomaly(anomaly.detector)
+        return anomalies

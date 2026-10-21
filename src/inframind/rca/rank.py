@@ -24,10 +24,12 @@ Hard rules enforced here:
 from __future__ import annotations
 
 import hashlib
+import time
 from collections.abc import Sequence
 from datetime import datetime
 
 from inframind.common.anomaly import Anomaly
+from inframind.metrics import observe_ranking
 
 from .change_correlation import ChangeEvent, change_correlation
 from .config import RCAParams
@@ -96,6 +98,7 @@ def rank_candidates(
     params = params or RCAParams()
     limit = top_k if top_k is not None else params.top_k
     opened_at, _closed_at = window
+    _started = time.perf_counter()
 
     grouped_anomalies = anomalies_by_service(anomalies)
     grouped_changes = changes_by_service(change_events)
@@ -155,6 +158,7 @@ def rank_candidates(
         )
 
     scored.sort(key=lambda c: (-c.score, _tiebreak_key(c.service, params.tiebreak_seed)))
+    observe_ranking(time.perf_counter() - _started)
     return scored[:limit]
 
 

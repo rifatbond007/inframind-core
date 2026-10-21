@@ -82,16 +82,23 @@ def create_app(
 
     @app.get("/metrics")
     async def metrics() -> Response:
-        """Prometheus exposition for the InfraMind process itself.
+        """Prometheus exposition for the InfraMind API process.
 
-        Kept dependency-free: the counters below are the process-level signals the
-        testbed needs (uptime, request counter). A richer exposition (histograms,
-        per-incident gauges) lands with the P8 deployment, which is where a real
-        prometheus_client integration belongs.
+        Two blocks, concatenated. The first is hand-rolled and dependency-free: the
+        process-level signals the testbed has always scraped (`inframind_up`,
+        `inframind_uptime_seconds`). The second is `inframind.metrics.render_extra()` —
+        the six pipeline metrics from standard 11 §11.12. Splitting them keeps the P6
+        contract byte-identical while letting the pipeline metrics grow.
+
+        Worker processes serve the *same* registry from their own `/metrics` on port 9100
+        (`metrics.start_http_server`); the chart's ServiceMonitor scrapes this endpoint
+        and the PodMonitor scrapes the workers.
         """
         import time
 
-        payload = (
+        from inframind import metrics as inframind_metrics
+
+        head = (
             "# HELP inframind_up Whether the InfraMind API process is serving.\n"
             "# TYPE inframind_up gauge\n"
             "inframind_up 1\n"
@@ -99,7 +106,10 @@ def create_app(
             "# TYPE inframind_uptime_seconds gauge\n"
             f"inframind_uptime_seconds {time.monotonic():.3f}\n"
         )
-        return Response(content=payload, media_type="text/plain; version=0.0.4")
+        return Response(
+            content=head + inframind_metrics.render_extra(),
+            media_type="text/plain; version=0.0.4",
+        )
 
     return app
 

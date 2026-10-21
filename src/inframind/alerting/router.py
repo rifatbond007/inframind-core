@@ -30,6 +30,7 @@ from typing import Literal
 
 from inframind.common.incident import Incident
 from inframind.common.logging import get_logger
+from inframind.metrics import record_alert
 from inframind.rca.evidence import Candidate
 
 from . import sinks
@@ -100,6 +101,7 @@ class AlertRouter:
         for channel, coro in tasks:
             alert_id, status = await coro
             outcomes.append((alert_id, channel, status))
+            record_alert(channel, str(incident.severity.value))
 
         self._dedup.record(incident.id, incident.severity)
         logger.info(

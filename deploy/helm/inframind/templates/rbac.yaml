@@ -1,0 +1,109 @@
+{{- if .Values.rbac.create }}
+{{- /* READ-ONLY. D22's change-correlation watcher needs to read the six resource kinds below;
+       nothing in InfraMind writes to the Kubernetes API or execs into a pod (standard 11
+       section 11.5). A Role that grows a `create`/`update`/`pods/exec` verb is a bug. */}}
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "inframind.fullname" . }}-role
+  labels:
+    {{- include "inframind.labels" . | nindent 4 }}
+rules:
+  # Signal collection and change correlation (D22): read pods, pod logs, events, configmaps,
+  # secrets, and the workload kinds whose spec changes are correlated with an incident.
+  #
+  # `secrets` is read-only and used solely to observe *that* a Secret changed — the watcher
+  # records the metadata and never the value (standard 14, D9).
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - events
+      - configmaps
+      - secrets
+      - services
+      - endpoints
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+      - replicasets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "inframind.fullname" . }}-rolebinding
+  labels:
+    {{- include "inframind.labels" . | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "inframind.fullname" . }}-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "inframind.serviceAccountName" . }}
+    namespace: {{ .Release.Namespace }}
+{{- if .Values.rbac.watchNamespaces }}
+---
+{{- /* Per-namespace bindings so INFRAMIND_WATCH_NAMESPACES can be widened past the release
+       namespace without granting cluster-wide read. A namespaced Role cannot grant access
+       outside its own namespace, so each watched namespace needs its own pair. */}}
+{{- range $ns := .Values.rbac.watchNamespaces }}
+{{- if ne $ns $.Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ include "inframind.fullname" $ }}-role
+  namespace: {{ $ns }}
+  labels:
+    {{- include "inframind.labels" $ | nindent 4 }}
+rules:
+  - apiGroups: [""]
+    resources:
+      - pods
+      - pods/log
+      - events
+      - configmaps
+      - secrets
+      - services
+      - endpoints
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - statefulsets
+      - daemonsets
+      - replicasets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources:
+      - horizontalpodautoscalers
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ include "inframind.fullname" $ }}-rolebinding
+  namespace: {{ $ns }}
+  labels:
+    {{- include "inframind.labels" $ | nindent 4 }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: {{ include "inframind.fullname" $ }}-role
+subjects:
+  - kind: ServiceAccount
+    name: {{ include "inframind.serviceAccountName" $ }}
+    namespace: {{ $.Release.Namespace }}
+{{- end }}
+{{- end }}
+{{- end }}
+{{- end }}

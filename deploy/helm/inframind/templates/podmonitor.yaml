@@ -1,0 +1,26 @@
+{{- /* The PodMonitor scrapes every worker pod's port 9100 directly, bypassing the Service. A
+       PodMonitor is the right tool here because Prometheus needs *all* replicas of the four
+       worker containers (api / ingestion / detection / rca) and they each have a Pod IP that
+       changes on rolling restart; routing through a ClusterIP Service and then through the
+       ServiceMonitor would lose the per-pod scope that makes `inframind_anomalies_emitted_total`
+       meaningful per detector. Standard 11 section 11.12. */}}
+{{- if and .Values.podMonitor.enabled .Values.metrics.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: {{ include "inframind.fullname" . }}-workers
+  labels:
+    {{- include "inframind.labels" . | nindent 4 }}
+    {{- with .Values.podMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "inframind.selectorLabels" . | nindent 6 }}
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.podMonitor.interval }}
+      scrapeTimeout: {{ .Values.podMonitor.scrapeTimeout }}
+{{- end }}

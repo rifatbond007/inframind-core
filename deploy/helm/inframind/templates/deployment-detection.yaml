@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "inframind.fullname" . }}-detection
+  labels:
+    {{- include "inframind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: detection
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "inframind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: detection
+  template:
+    metadata:
+      labels:
+        {{- include "inframind.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: detection
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "inframind.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: detection
+          image: {{ include "inframind.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          # Single process for both: detection (D2-Detect pipeline) and correlation
+          # (D4 Lifecycle). The correlation worker reads `stream:signals`, runs the engine,
+          # and writes incidents to the same stream. Separate "detection" and "correlation"
+          # Deployments would have to share state for nothing, so they live together here.
+          command: ["python", "-m", "inframind.correlation.worker"]
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.workerPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "inframind.fullname" . }}-config
+            - secretRef:
+                name: {{ include "inframind.secretName" . }}
+          resources:
+            {{- toYaml .Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

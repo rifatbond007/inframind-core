@@ -289,3 +289,64 @@ def test_common_modules_are_all_listed_in_the_structure_standard() -> None:
     for module in sorted((ROOT / "src" / "inframind" / "common").glob("*.py")):
         if module.name != "__init__.py":
             assert f"`{module.name}`" in listed, f"standard 01 §1.4 should list {module.name}"
+
+
+# --- P8: chart + image metadata (standard 11) ---
+
+
+def _chart_values() -> dict[str, object]:
+    import yaml
+
+    text = (ROOT / "deploy" / "helm" / "inframind" / "values.yaml").read_text()
+    return yaml.safe_load(text)
+
+
+def test_helm_chart_values_repository_matches_pyproject() -> None:
+    """The chart's default image must point at this repo, not a drifted sibling."""
+    pyproject = tomllib.loads((ROOT / "pyproject.toml").read_text())
+    homepage = pyproject["project"]["urls"]["Homepage"]
+    # https://github.com/<owner>/<repo> -> ghcr.io/<owner>/<repo>
+    owner_repo = homepage.removeprefix("https://github.com/")
+    assert _chart_values()["image"]["repository"] == f"ghcr.io/{owner_repo}", (
+        "values.yaml image.repository drifted from pyproject.toml's Homepage"
+    )
+
+
+def test_helm_chart_ships_no_real_secret_in_secret_yaml() -> None:
+    """`secret.yaml` renders an empty stringData. A real key here rejects the PR."""
+    secret_tpl = (ROOT / "deploy/helm/inframind/templates/secret.yaml").read_text()
+    values = _chart_values()
+    assert values["secretRef"]["LLM_API_KEY"] == ""
+    assert values["secretRef"]["INFRAMIND_ALERT_WEBHOOK_SECRET"] == ""
+    # The template must not carry a literal non-empty secret on either branch.
+    assert 'llm-api-key: ""' in secret_tpl
+    assert "OPENAI_API_KEY" not in secret_tpl or "quote" in secret_tpl
+
+
+def test_helm_chart_ships_four_deployments_per_d27() -> None:
+    """D27: alerting and llm stay in-process, so the chart has 4 Deployments, not 7."""
+    templates = ROOT / "deploy" / "helm" / "inframind" / "templates"
+    deployments = sorted(t.name for t in templates.glob("deployment-*.yaml"))
+    assert deployments == [
+        "deployment-api.yaml",
+        "deployment-detection.yaml",
+        "deployment-ingestion.yaml",
+        "deployment-rca.yaml",
+    ]
+
+
+def test_dockerfile_runs_as_non_root() -> None:
+    """The Dockerfile must switch to a non-root USER before the CMD."""
+    dockerfile = (ROOT / "Dockerfile").read_text()
+    assert "\nUSER " in dockerfile, "Dockerfile has no USER directive"
+    # The USER line must come after the last FROM (i.e. apply to the runtime stage).
+    runtime_start = dockerfile.rindex("FROM python:")
+    user_line = dockerfile.index("\nUSER ")
+    assert user_line > runtime_start, "USER directive is not in the runtime stage"
+
+
+def test_dockerignore_excludes_secrets_and_testbed() -> None:
+    ignore = (ROOT / ".dockerignore").read_text().splitlines()
+    entries = {line.strip() for line in ignore if line.strip() and not line.startswith("#")}
+    for required in (".git", ".env", ".venv", "testbed/.kube", "data/"):
+        assert required in entries, f".dockerignore must exclude {required}"

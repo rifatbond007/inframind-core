@@ -23,6 +23,7 @@ from inframind.common.ids import new_ulid
 from inframind.common.incident import Incident, IncidentState
 from inframind.common.signal import Severity, Signal
 from inframind.detection.freeze import BaselineFreezeCoordinator
+from inframind.metrics import record_incident_opened
 
 from .config import CorrelationParams
 from .fingerprint import fingerprint
@@ -158,6 +159,7 @@ class IncidentTracker:
         self._active[record.id] = record
         self._add(record, anomaly)
         record.severity = self._classify(record)
+        record_incident_opened(record.first_service)
         return record
 
     def _add(self, record: _Record, anomaly: Anomaly) -> None:
