@@ -22,7 +22,7 @@ flowchart LR
 4. Do not commit until the applicable gates pass: `pre-commit run --all-files`, `make lint`, `make test`. See [commit-protocol](../.claude/skills/commit-protocol/SKILL.md).
 5. Commit message is [Conventional Commits](https://www.conventionalcommits.org/). The author is the GitHub user on the commit. Do not add `GitHub-Author` or `Co-authored-by` trailers.
 6. Append one row to [`PROGRESS.md`](PROGRESS.md) in the same change.
-7. Open a pull request: personal branch → `dev`, then `dev` → `main` at a milestone. Squash-merge after CI is green.
+7. Open a pull request: personal branch → `dev`, then `dev` → `main` at a milestone. Squash-merge after CI is green. See [pr-protocol](../.claude/skills/pr-protocol/SKILL.md).
 
 Phase exit checklists (P0 through P9) are the [`phase-gates`](../.claude/skills/phase-gates/SKILL.md) skill. A phase does not start until the previous gate is green.
 
@@ -97,7 +97,7 @@ agent; `docs-writer` updates docs whenever a contract changes.
 | `alerting-storage-engineer` | Prome (Rifat on `dev-rifat` from P6 onward) | `signal-schema` | P6 (alerting + storage + API) |
 | `devops-packager` | Rifat | `helm-packaging` | P8 |
 | `test-writer` | owner of the change | `python-standards` | every |
-| `code-reviewer` | reviewer | `commit-protocol` | every PR |
+| `code-reviewer` | reviewer | `commit-protocol`, `pr-protocol` | every PR |
 | `evaluation-engineer` | Rifat | `fault-scenario`, `run-evaluation` | P7 |
 | `results-analyst` | Prome | `results-to-latex` | P7–P9 |
 | `literature-scout` | team | `paper-writing` | P9 |
@@ -122,6 +122,7 @@ Files: `.claude/agents/<category>/<name>.md`.
 |---|---|
 | `phase-gates` | the skill itself (P0→P9 checklists) |
 | `commit-protocol` | [`08-commit-protocol.md`](standards/08-commit-protocol.md) |
+| `pr-protocol` | [`08-commit-protocol.md`](standards/08-commit-protocol.md) sections 8.7 and 8.8 |
 | `python-standards` | [`02-python-standards.md`](standards/02-python-standards.md) |
 | `signal-schema` | [`03-signal-schema.md`](standards/03-signal-schema.md) |
 | `add-collector` | [`04-add-collector.md`](standards/04-add-collector.md) |

@@ -84,7 +84,7 @@ Organized by category under `.claude/agents/<category>/`:
 - **writing/**: `literature-scout`, `reference-verifier`, `paper-writer`, `paper-reviewer`, `docs-writer`
 
 ## Skills (see .claude/skills/) — use them, don't reinvent
-Entrypoints link to `docs/standards/` (see `docs/AGENT_WORKFLOW.md`). List: commit-protocol, phase-gates, python-standards, signal-schema, add-collector, add-detector, rca-scoring, llm-evidence-explainer, testbed-ops, fault-scenario, run-evaluation, helm-packaging, paper-writing, reference-verification, results-to-latex
+Entrypoints link to `docs/standards/` (see `docs/AGENT_WORKFLOW.md`). List: commit-protocol, pr-protocol, phase-gates, python-standards, signal-schema, add-collector, add-detector, rca-scoring, llm-evidence-explainer, testbed-ops, fault-scenario, run-evaluation, helm-packaging, paper-writing, reference-verification, results-to-latex
 
 ## Agent workflow
 Follow [`docs/AGENT_WORKFLOW.md`](docs/AGENT_WORKFLOW.md): read progress, pick one agent, load its skill, work on `dev-rifat` / `dev-moneem` / `dev-prome`, gates green, then commit. Skills point at `docs/standards/`. Phase checklists: `phase-gates` skill.
