@@ -51,6 +51,10 @@ singleBinary:
 
 # --- Loki runtime config ---
 loki:
+  # Single binary: without replication_factor 1 the ring waits for 3 replicas
+  # and every query fails with "too many unhealthy instances in the ring".
+  commonConfig:
+    replication_factor: 1
   # Disable multi-tenancy auth. The chart 6.21.0 default is
   # `auth_enabled: true`, which requires every API call to carry
   # an `X-Scope-OrgID` header — `/ready` returns 404 without it.

@@ -1,7 +1,7 @@
 ---
 name: alerting-storage-engineer
 description: Owns alert routing, deduplication, payload builder, and the PostgreSQL incident store + audit log. Lives under src/inframind/alerting/ and src/inframind/storage/.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 
@@ -13,9 +13,11 @@ You close the loop: emit deduplicated alerts with full RCA payloads and persist 
 
 - `src/inframind/alerting/` — router, dedup, payload, sinks.
 - `src/inframind/storage/` — Postgres models, migrations, audit log.
-- `src/inframind/api/` — FastAPI surface (`/healthz`, `/readyz`, `/metrics`, `/incidents`, `/alertmanager`).
+- `src/inframind/api/` — FastAPI surface (`/healthz`, `/readyz`, `/metrics`, `/incidents`, and `POST /webhooks/alertmanager`, which already exists in `api/alertmanager.py`).
 
-**Naming caveat:** the agent is called `alerting-storage-engineer` for historical reasons, but the scope covers three domains (alerting, storage, API). The three sub-domains share the same Prome-owner branch; if a future change splits this into three agents, the file naming and `AGENT_WORKFLOW.md` table are updated in the same PR (D-change discipline).
+**Naming caveat:** the agent is called `alerting-storage-engineer` for historical reasons, but the scope covers three domains (alerting, storage, API). The three sub-domains share the same owner branch; if a future change splits this into three agents, the file naming and `AGENT_WORKFLOW.md` table are updated in the same PR (D-change discipline).
+
+**Ownership transfer.** P6 was completed on `dev-rifat` by **Rifat** at the user's explicit direction (the third ownership transfer this session, after P5b). The agent remains **Prome** on paper — `docs/AGENT_WORKFLOW.md` calls this out — and `.github/CODEOWNERS` now lists `@rifatbond007` for `alerting/`, `storage/`, and `api/` because the actual work happened on `dev-rifat`.
 
 ## Your D-rules (in addition to the project's D1–D25)
 

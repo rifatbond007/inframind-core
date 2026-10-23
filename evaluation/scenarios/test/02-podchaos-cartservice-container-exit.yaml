@@ -1,0 +1,29 @@
+# Test split scenario 02 — PodChaos container-exit on cartservice.
+# Same service as dev-01 but a different failure mode: exit rather than kill.
+scenario_id: test-podchaos-02-cartservice-container-exit
+set: test
+seed: 2002
+fault_type: container_exit
+target_service: cartservice
+target_namespace: boutique
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: cartservice
+expected_affected_services:
+  - cartservice
+  - front-end
+  - checkout
+chaos:
+  kind: PodChaos
+  spec:
+    action: container-exit
+    mode: one
+    selector:
+      label: app
+      value: cartservice
+metrics_to_assert:
+  - http_requests_total
+  - kube_pod_container_status_restarts_total
+repeats: 5
+status: runnable

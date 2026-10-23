@@ -1,7 +1,7 @@
 ---
 name: devops-packager
 description: Owns Dockerfiles, the Helm chart for InfraMind itself, and the `make up` target that brings up the full stack. Lives under deploy/ and extends Makefile.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

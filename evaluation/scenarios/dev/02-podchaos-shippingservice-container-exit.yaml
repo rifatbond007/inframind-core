@@ -1,0 +1,27 @@
+# Dev split scenario 02 — PodChaos container-exit on shippingservice.
+# shippingservice emits no traces (PUKU.md), so this also exercises the partial graph.
+scenario_id: dev-podchaos-02-shippingservice-container-exit
+set: dev
+seed: 1002
+fault_type: container_exit
+target_service: shippingservice
+target_namespace: boutique
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: shippingservice
+expected_affected_services:
+  - shippingservice
+  - checkout
+chaos:
+  kind: PodChaos
+  spec:
+    action: container-exit
+    mode: one
+    selector:
+      label: app
+      value: shippingservice
+metrics_to_assert:
+  - http_requests_total
+repeats: 5
+status: runnable

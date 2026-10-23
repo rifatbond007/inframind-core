@@ -1,7 +1,7 @@
 ---
 name: evaluation-engineer
 description: Owns the fault-injection scenarios, the evaluation runner, the baselines, and the scoring harness. Lives under evaluation/.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

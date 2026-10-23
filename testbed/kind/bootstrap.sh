@@ -47,6 +47,17 @@ if ! docker info >/dev/null 2>&1; then
 fi
 log_ok "docker reachable"
 
+# --- pre-flight 2b: inotify limits (kind + Chaos Mesh + Prometheus exhaust the 128 default) ---
+INOTIFY_MIN=512
+INOTIFY_NOW="$(cat /proc/sys/fs/inotify/max_user_instances 2>/dev/null || echo 0)"
+if [ "$INOTIFY_NOW" -lt "$INOTIFY_MIN" ]; then
+  log_fail "fs.inotify.max_user_instances=$INOTIFY_NOW (< $INOTIFY_MIN): pods will CrashLoop with 'too many open files'"
+  log_warn "  fix: sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288"
+  log_warn "  persist: /etc/sysctl.d/99-kind.conf with the same two keys"
+  exit 1
+fi
+log_ok "inotify max_user_instances=$INOTIFY_NOW"
+
 # --- idempotency: skip if cluster already exists ---
 # If the cluster is up, no new memory needs to be allocated; skip the
 # RAM check so a re-run of `make up` after `make obs` (which fills the
@@ -54,6 +65,23 @@ log_ok "docker reachable"
 # error. The RAM check only gates the *create* path below.
 if kind get clusters 2>/dev/null | grep -qx "$CLUSTER_NAME"; then
   log_ok "cluster '$CLUSTER_NAME' already exists; skip create"
+  # A registered cluster can have stopped or wedged nodes (host reboot,
+  # containerd sandbox reservations). Fail here instead of letting the
+  # next step die with a raw "connection refused".
+  docker start "${CLUSTER_NAME}-control-plane" "${CLUSTER_NAME}-worker" >/dev/null 2>&1 || true
+  API_UP=0
+  for _ in $(seq 1 30); do
+    if kubectl --kubeconfig "$KUBECONFIG_PATH" --context "$CONTEXT_NAME" get nodes >/dev/null 2>&1; then
+      API_UP=1
+      break
+    fi
+    sleep 2
+  done
+  if [ "$API_UP" -ne 1 ]; then
+    log_fail "cluster '$CLUSTER_NAME' exists but its API server is not answering"
+    log_warn "  fix: make down && make up   (the node state is wedged; recreate it)"
+    exit 1
+  fi
   log_info "next: make kind-status"
   exit 0
 fi

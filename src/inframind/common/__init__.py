@@ -1,9 +1,8 @@
-"""Shared cross-cutting code.
+"""Shared cross-cutting code (imports nothing from other InfraMind packages).
 
-Planned (Step 2 onward):
+* ``signal`` - the ``Signal`` Pydantic model every collector publishes.
+* ``bus`` - Redis Streams publish and the idempotent consumer-group reader.
+* ``stream_keys``, ``ids``, ``time``, ``logging``, ``exceptions`` - pinned keys and helpers.
 
-* ``Signal`` Pydantic model (id, ts, source, type, service, severity, attrs, trace_id).
-* ``Config`` loader (env-driven).
-* Logging helpers (structured JSON logs).
-* Clock / time utilities for tests.
+``config`` (pydantic-settings) lands with the first service that needs it.
 """

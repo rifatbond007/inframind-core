@@ -1,0 +1,36 @@
+apiVersion: v2
+name: inframind
+description: >-
+  InfraMind — Kubernetes multi-signal incident detection + graph-guided root cause analysis.
+  A research artifact (D8): the chart installs next to Online Boutique, the observability
+  stack, and Chaos Mesh inside the same kind cluster.
+type: application
+
+# Chart version is independent of the app version. Bump the patch on every template change;
+# bump the minor when a values key is added or removed.
+version: 0.1.0
+
+# Matches pyproject.toml's project.version.
+appVersion: "0.0.0"
+
+keywords:
+  - kubernetes
+  - observability
+  - rca
+  - incident
+  - microservices
+  - capstone
+
+home: https://github.com/rifatbond007/inframind-core
+sources:
+  - https://github.com/rifatbond007/inframind-core
+
+maintainers:
+  - name: InfraMind Team
+    email: inframind@example.invalid
+
+annotations:
+  # D27: alerting and llm stay in-process, so the chart ships four Deployments, not seven.
+  # See docs/decision-tree.md and docs/standards/11-helm-packaging.md section 11.2.
+  inframind.io/deployment-count: "4"
+  inframind.io/llm-and-alerting: in-process

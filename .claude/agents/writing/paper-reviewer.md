@@ -1,7 +1,7 @@
 ---
 name: paper-reviewer
 description: "Reviews the paper draft before submission. Checks number provenance, citation accuracy, novelty claim, D1-D25 compliance, formatting, and contribution clarity."
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, WebSearch
 ---
 

@@ -1,0 +1,29 @@
+# Test split scenario 03 — PodChaos node-cordon on the node hosting shipping.
+# Cordon evicts workloads rather than killing one pod, so the blast radius is wider.
+scenario_id: test-podchaos-03-node-cordon
+set: test
+seed: 2003
+fault_type: node_cordon
+target_service: shippingservice
+target_namespace: boutique
+duration_s: 300
+warmup_s: 90
+cooldown_s: 90
+expected_root_cause: shippingservice
+expected_affected_services:
+  - shippingservice
+  - checkout
+  - front-end
+chaos:
+  kind: PodChaos
+  spec:
+    action: node-cordon
+    mode: all
+    selector:
+      label: app
+      value: shippingservice
+metrics_to_assert:
+  - kube_pod_status_ready
+  - http_requests_total
+repeats: 5
+status: runnable

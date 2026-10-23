@@ -53,6 +53,6 @@ spec:
       - default
     labelSelectors:
       app: frontend
-    containerNames:
-      - server
+  containerNames:
+    - server
   duration: "5m"

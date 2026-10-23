@@ -37,33 +37,14 @@
 #   - testbed/kind/cluster.yaml (extraMounts plumbing)
 
 # --- Controller manager ---
-# Scope the controller to only the SUT namespace (`default`). The chart
-# default is `clusterScoped: true`, which makes the controller watch
-# every namespaced resource in the cluster. On a busy kind cluster
-# (monitoring + chaos-mesh + chaos-testing + default + kube-system)
-# the watch surface is large enough to exhaust fds before the cache
-# syncs, and the manager CrashLoops with "too many open files" before
-# any chaos experiment can be applied. `targetNamespace: default`
-# scopes the watch to one namespace — enough for Slice 4 acceptance,
-# easy to widen in `make testbed-full`.
-#
-# NB on the "too many open files" risk: we considered setting
-# `securityContext.sysctls: [{name: fs.nr-open, value: "65536"}]`
-# here, but kind's pod security admission (which enforces the
-# "baseline" policy by default in modern kind versions) rejects
-# `fs.nr-open` as an "unsafe" sysctl with `SysctlForbidden`. The
-# workaround — adding the kube-system label
-# `pod-security.kubernetes.io/enforce=privileged` to the
-# chaos-testing namespace — is worse than the problem, because it
-# would also disable the namespace-level restrictions we want for
-# the SUT. Instead, the slim default: scope to one namespace
-# (above), enable only the 4 controllers we use (below), enable
-# only the 4 webhooks they need (below), and start the controller
-# with the chart's default fd limit. The combination has been
-# verified to bring up clean on a 7 GiB host. If a future chart
-# upgrade re-introduces the fd pressure, raise the controller's
-# `GOGC` env to 200 (long-running soak) or limit the watch
-# surface further via `targetNamespace`.
+# Cluster-scoped: our chaos CRs live in `chaos-testing` and select pods in
+# `default`. With `clusterScoped: false` the controller only reconciles CRs
+# in `targetNamespace`, so CRs in `chaos-testing` were validated by the
+# webhook but never acted on (empty .status, no events, no pod killed).
+# The "too many open files" CrashLoop seen on the first bring-up was the
+# host's fs.inotify.max_user_instances (default 128), not the watch
+# surface; `bootstrap.sh` warns when it is below 512. `targetNamespace`
+# only matters when clusterScoped is false; it is kept at `default`.
 controllerManager:
   replicaCount: 1
   targetNamespace: default
@@ -83,27 +64,13 @@ controllerManager:
     requests:
       cpu: 100m
       memory: 128Mi
-  # Only enable the 4 controllers we actually use. The chart default
-  # is `["*"]`, which boots ~20+ controllers (awschaos, azurechaos,
-  # gcpchaos, kernelchaos, jvmchaos, physicalmachinechaos, etc.) —
-  # each opens watches on the kube-apiserver, and the resulting fd
-  # pressure triggers a "too many open files" CrashLoop on kind.
-  # Slice 4/5 use the 3 individual fault controllers; `workflows`
-  # is needed by P7 (chaos-mesh 2.7.x moved the per-CR `scheduler`
-  # field out of PodChaos/StressChaos/NetworkChaos and into a
-  # separate Workflow resource, so repeating-fault eval runs will
-  # need this controller).
-  enabledControllers:
-    - podchaos
-    - networkchaos
-    - stresschaos
-    - workflows
-  # Only enable the webhooks the controllers need.
-  enabledWebhooks:
-    - podchaos
-    - networkchaos
-    - stresschaos
-    - workflows
+  # Controllers and webhooks are left at the chart default ("*"). Listing
+  # only podchaos/networkchaos/stresschaos/workflows looked like a
+  # fd-saving slim-down, but it disables Chaos Mesh's shared lifecycle
+  # controllers: webhooks still validated every CR while nothing
+  # reconciled it (no finalizer, empty .status, no pod ever killed).
+  # The fd CrashLoop was the host's fs.inotify.max_user_instances, not
+  # the controller count; see testbed/kind/bootstrap.sh pre-flight.
 
 # --- Daemon ---
 # Runs on every node. Mounts /var/run/docker.sock (D2 plumbing from
@@ -173,12 +140,9 @@ webhook:
 # --- Image pull policy ---
 imagePullPolicy: IfNotPresent
 
-# Cluster scope: scope to the SUT namespace only (see
-# controllerManager.targetNamespace above). With clusterScoped: true
-# the manager watches all namespaces; the resulting fd pressure
-# triggers a CrashLoop on kind. Set to false + targetNamespace to
-# `default` to keep the watch surface small.
-clusterScoped: false
+# Cluster scope: required so CRs in `chaos-testing` can target pods in
+# `default` (see the controllerManager comment above).
+clusterScoped: true
 
 # --- Service account ---
 # The default SA `chaos-mesh` is created automatically with the

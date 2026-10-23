@@ -1,7 +1,7 @@
 ---
 name: literature-scout
 description: Surveys published work on observability, anomaly detection, RCA, and LLM-assisted diagnosis. Maintains the references file and the related-work sections.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, WebSearch, WebFetch
 ---
 

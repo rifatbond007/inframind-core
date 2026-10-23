@@ -78,6 +78,65 @@ only — final numbers come from the held-out test set.
 
 These are the comparison set. Adding or removing a baseline is a D-change.
 
+## D7-Replay. Replay is the reproducibility mechanism
+
+A scenario run is reproducible from `(scenario_id, seed)` because the pipeline is
+**signal-time-driven**: detection, correlation, and ranking consume the `Signal` stream's
+`ts` values, not the wall clock. `evaluation/runner/replay.py` re-feeds a fixture's
+`signals.ndjson` through detection → correlation → ranking and yields a `ResultRow` that
+is byte-identical across runs on the same fixture.
+
+**Why:** the bus, the collectors, the freeze coordination, and the chronograph all read
+signal time. A fixture pins that signal time, so a replay pins the whole pipeline's
+output. The replay is the **only** way to run the harness on a dev box without docker
+(it is what `make eval` runs); cluster-backed live runs become a way to *produce*
+fixtures, not to score them.
+
+**Alternatives:**
+
+- Wall-clock regression (rely on the timestamp at replay time): rejected because it cannot
+  be made deterministic across hosts.
+- Mocking the pipeline: rejected because it does not exercise the production path.
+
+**Trigger to revisit:** if any future code path inside detection, correlation, or ranking
+starts reading wall time, this decision breaks and a fixture cannot reproduce — that is
+itself the bug. The `tests/unit/test_repo_metadata.py` `INFRAMIND_*` env-key list and the
+P7 replay integration test are the mechanical reminders.
+
+## D26-Chaos-runtime-blocked. Stress/Network chaos is blocked; PodChaos is the live path
+
+The D2-Chaos-runtime proposal (containerd runtime in `testbed/helm-values/chaos-mesh.yaml`)
+remains pending user approval, a `make chaos` re-run, and a `make smoke-testbed` check
+that includes a StressChaos injection. Until it lands, StressChaos / NetworkChaos do not
+inject against the containerd node — they raise `expected docker:// but got container`.
+
+**Why this PR records the blocker:**
+
+- 6 of the 14 locked scenarios (D6) require StressChaos or NetworkChaos. Leaving them in
+  the scenarios folder without a marker would let a future run silently score them as
+  zero (a fabricated number).
+- P7 makes the blocker an artefact: every blocked scenario file carries
+  `# block_status: d2_chaos_runtime_docker` and `status: blocked`. The harness refuses
+  such a scenario unless `INFRAMIND_EVAL_ALLOW_BLOCKED=1`, in which case it writes
+  rows with `blocked=True` and a *non-fabricated* `detected=False`. The runner's exit
+  code is 3 on a refused blocked run.
+- The blocked scenarios are P7-mandatory once D2-Chaos-runtime lands; P7's seed corpus
+  keeps them written and the tests keep the blocked marker asserted.
+
+**Alternatives:**
+
+- Delete the blocked scenarios from the repo until the runtime lands: rejected because
+  D6's "≥12 distinct scenarios" promise then becomes 8 scenarios in dev and 4 in test,
+  which would itself break the locked coverage. Writing the blocker preserves the locked
+  spec.
+- Score blocked scenarios as zero today: rejected (PUKU.md: never invent a number).
+
+**Trigger to revisit:** D2-Chaos-runtime is approved and `make smoke-testbed` confirms
+all six blocked scenarios now replay end-to-end. The harness then drops the
+`d2_chaos_runtime_docker` block reason from those files and the 6 become runnable.
+
+**Cross-ref:** `docs/standards/10-evaluation.md` §10.3; `tests/integration/test_evaluation_replay.py::test_blocked_scenarios_are_all_stress_or_network_chaos`.
+
 ## D9. LLM access is gated by redaction and a local fallback
 
 Before any text leaves the process:
@@ -215,6 +274,44 @@ itself was authored with assistance from ...`).
 **Trigger to revisit:** moving to a richer authorship model (e.g. GPG-signed
 commits, SSH signing, or a different noreply attestation) is a D-change.
 
+## D27-InProcessAlertingLlm. Alerting and the LLM explainer stay in-process
+
+The Helm chart ships **four** Deployments — `api`, `ingestion`, `detection`,
+`rca` — not the seven that a stage-per-Deployment reading of `standard 11`
+section 11.2 implies. Two stages are folded into processes that already
+exist:
+
+- **Alerting** runs inside the `api` process, as `api.app`'s `AlertRouter`.
+  The Alertmanager webhook *is* the alert sink, so a separate Deployment
+  would have to be reachable from the api anyway; the router is
+  constructed there and dispatched synchronously from the webhook handler.
+- **The LLM explainer** runs inside the `rca` worker, as a synchronous
+  `llm.explain()` call between ranking and evidence bundling. D1 already
+  makes the LLM presentation-only, so there is no independent scaling axis
+  that a separate Deployment would buy.
+
+`ingestion` is a single Deployment carrying three containers (the
+prometheus, loki, and jaeger collectors) because all three poll the same
+observability-stack pods and share one failure domain, one ServiceAccount
+token, and one scheduling decision.
+
+**Why:** a Deployment is a failure domain, not a stage label. Two
+Deployments that must be co-scheduled, share a ServiceAccount, and have no
+independent scaling or failure requirement are one Deployment with extra
+configuration. The chart that ships seven would carry two pods whose failure
+is a *false* signal — a replica whose crash means nothing because its
+neighbour does the same work in the same process. That inflates the
+"pods healthy" reading of `kubectl get pods` with nodes that carry no
+information, which is the same misread the `coverage` block in
+`evaluation/report.py` exists to prevent on the numbers side.
+
+**Trigger to revisit:** a production requirement that gives either stage an
+independent lifecycle — separate LLM autoscaling because explainer latency
+is the incident-response bottleneck, or alerting backpressure because a
+slow sink must not hold an api worker — is a D-change. That requirement
+does not exist at `kind` scale, and inventing the seam before it is needed
+would be speculative.
+
 ## D-Setup. Step 0 only scaffolds the repo
 
 Step 0 (this phase) creates the module skeletons, tooling, CI, and dev compose. No functional
@@ -238,6 +335,8 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 
 - **D21** · 2026-10-11 · The service dependency graph is a single pinned primitive called `ServiceGraph`, owned by the RCA worker (one replica), with edges `caller -> callee`, weighted by `p95_latency_ms * log(call_count)` over the last 100 samples (α = 0.1 EWMA). Cold-start seed from `RCA_GRAPH_PATH`. Live updates from the OTel / Jaeger collector over the pinned Redis stream `stream:graph-updates`. Edges age out via `GRAPH_DECAY_HALF_LIFE_S`; an edge below `GRAPH_MIN_OBSERVATIONS` is held back. Snapshot every 60 s and on `SIGTERM`; corrupt snapshot -> cold start, never a crash. · Why: the graph is consumed by the RCA walker, the PageRank baseline, the correlation severity classifier, and the LLM evidence bundler — six call sites in total. Without a pinned primitive, every consumer invents its own, and a deviation is a silent scoring bug. The single-writer / single-reader model also satisfies the D6 reproducibility contract: same `scenario_id + seed` -> same `GraphUpdate` sequence -> same in-memory graph -> same ranking. · Alternatives: (a) rebuild the graph on every incident from raw traces — rejected for hot-path latency (1–5 ms per request). (b) Reuse `stream:signals` for graph updates — rejected because `GraphUpdate` has a different shape and a different consumer lifecycle. (c) Store the live copy in Postgres — rejected because the ranker needs O(1) edge access, not a SQL round-trip. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/13-service-graph-contract.md`.
 
+- **D27-InProcessAlertingLlm** · 2026-10-21 · The Helm chart ships four Deployments (`api`, `ingestion`, `detection`, `rca`), not seven. Alerting lives in `api.app.AlertRouter`; the LLM explainer lives in `rca.worker` as a synchronous `llm.explain()` call. `ingestion` is one Deployment with three collector containers. · Why: a Deployment is a failure domain, not a stage label. Neither folded stage has an independent scaling axis (D1 makes the LLM presentation-only) nor an independent failure requirement, so separate Deployments would add two pods to `kubectl get pods` whose health carries no information — the same misread the `coverage` block prevents on the numbers side. · Alternatives: (a) ship seven Deployments as `standard 11` section 11.2 literally reads — rejected as speculative scaffolding for a requirement that does not exist at `kind` scale. (b) split the LLM into a Deployment *and* make the call asynchronous — rejected because D1 makes the summary presentation-only, so an async boundary would buy nothing and cost an extra queue. (c) run the three collectors as three Deployments — rejected because they poll the same observability pods and share a failure domain. · Status: approved by team. Trigger to revisit: independent LLM autoscaling or alerting backpressure. Cross-ref: `docs/standards/11-helm-packaging.md` sections 11.2 and 11.12.
+
 - **D22** · 2026-10-11 · `change_correlation` is the pinned algorithm for the RCA `w4` term. Source is a single in-process K8s API watch on `Deployment`, `StatefulSet`, `DaemonSet`, `ConfigMap`, `Secret`, `HorizontalPodAutoscaler` (filtered to `.spec.template`, `.data`, `.spec.replicas` respectively), scoped to `INFRAMIND_WATCH_NAMESPACES`. Captures metadata only — **no Secret values stored**. Correlation uses a 30-minute pre-window (`CHANGE_CORRELATION_PRE_WINDOW_S`) before `incident.opened_at`, with recency-weighted soft saturation, returning a float in `[0, 1]`. The `change_events` Postgres table is append-only (D20). The watcher's `Role` extends the existing read-only `Role` (section 11.5) with `secrets` `get` / `list` / `watch` only — no write verbs, no `pods/exec`. · Why: the `w4` term is named and weighted in section 6.4 but had no algorithm. Without a pinned spec, every implementation invents its own and the D6 reproducibility contract breaks at the `w4` term. The K8s API watch (not the audit log) matches the existing read-only RBAC scope with a minimal extension. · Alternatives: (a) Watch the audit log — rejected for being more privileged than needed. (b) Poll the K8s API on a timer — rejected because polling misses bursts of changes between polls. (c) Use a sidecar — rejected because it adds a new `Deployment` with its own lifecycle for a single consumer. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/14-change-correlation.md`.
 
 - **D23-Scripts** · 2026-10-11 · A new top-level `scripts/` directory is permitted for dev-time tooling only. Currently holds the three pre-commit enforcement hooks (D24). Excluded from the Docker image, the Python package, the Helm chart, and the testbed manifests. Owned by testbed-engineer (Rifat) by default. · Why: the hook scripts are real Python with logic that deserves version control and a README. The alternative (inline as bash in `.pre-commit-config.yaml`) is unmaintainable past ~30 lines. Section 1.6 requires a D-number for any new top-level directory; this is the number. · Alternatives: (a) Hide the hooks under `.githooks/` — rejected because hidden dev-time tooling rots. (b) Put them under an existing dir (`tools/`, `dev/`) — rejected because they are scripts, not tools, and the names are misleading. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/15-enforcement-hooks.md` section 15.3.
@@ -245,6 +344,16 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 - **D24-Hooks** · 2026-10-11 · Three pre-commit hooks are required: `check_imports.py` (enforces the dependency DAG, section 1.3), `check_commit_message.py` (enforces the trailer ban, section 8.2.1), `check_progress.py` (enforces the PROGRESS.md row requirement, section 8.4). All three run locally (first line) and in CI (second line). Rollout is `--simulate` mode for one week per hook before enforcing. Per-line `# noqa: dag-violation` is the documented DAG exemption. The `Co-authored-by:` allow-list is a Python list in `check_commit_message.py` — adding a human co-author is a PR that updates the script. `PROGRESS_GRACE_DAYS` defaults to 7. · Why: the standards have failed silently in past projects because they were enforced by reviewer discipline, not by tooling. The three rules in scope here (DAG, trailers, PROGRESS.md) are the ones that have failed. · Alternatives: (a) Enforce all at once with no rollout — rejected; rollout with `--simulate` is the proven way to surface false positives without blocking the team. (b) Use a third-party hook framework (pre-commit-hooks) — rejected; the rules are InfraMind-specific. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/15-enforcement-hooks.md` sections 15.4–15.6.
 
 - **D25-Author** · 2026-10-10 · The commit `user.email` is the author's GitHub `noreply` email (`<username>@users.noreply.github.com`); the `user.name` is the local-part of that email — the GitHub username, lowercase, never a display name. The mechanical proof is `user.name == email_localpart`. The roster is not pinned: any team member's noreply email satisfies the rule, so joining or rotating the team requires no change to this file or the hook. No `Co-Authored-By:` trailer for any AI tool (Claude Code, Puku-CLI, Cursor, GitHub Copilot, Codex, JetBrains AI, and any `*<bot>*` pattern); the trailer form is reserved for the rare GitHub-UI-generated human pair-commit, whose email must also be a `<username>@users.noreply.github.com` from the team. · Why: the audit log (`docs/PROGRESS.md` "who" column, `git log --format='%an %ae'`, GitHub's contributor graph) must agree on who wrote what. The `noreply` email is the only identity GitHub proves; a display name is unstable and not attested by the email. Pinning a per-person allow-list would force a docs change every time the team rotates; a shape-based rule (email pattern + denylist of AI tool names) does not. Tool auto-trailers are audit-log noise: the author is the human, the tool's role goes in the body when it is interesting. · Alternatives: (a) Keep the display name and rely on the email — rejected because the `noreply` email attests only to the username. (b) Pin a per-person allow-list of `Co-authored-by:` local-parts — rejected because it forces a docs change on every team rotation. (c) Use GPG-signed commits — rejected for this capstone; the `user.name == email_localpart` check is sufficient. (d) Allow `Co-Authored-By:` for tools but mark them as such — rejected because the trailer is hard to filter downstream and the audit log gets noisier. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/08-commit-protocol.md` section 8.2.1; `.claude/agents/quality/code-reviewer.md`.
+
+- **Std-03-service-resolution** · 2026-10-19 · The Alertmanager mapper resolves a signal's `service` from the `deployment` label, then `pod` (via `service_from_pod`), then `service`, then `job`; standard 03 §3.7 previously said `service` first. · Why: the Prometheus Operator stamps `service` with the scrape target's Service, so every pod-level alert from kube-state-metrics carries `service=kube-prometheus-stack-kube-state-metrics` (observed on the live testbed) and would blame the exporter. · Alternatives: keep `service` first and strip the exporter name (brittle, per-exporter). · Status: applied in code and standards 03/04; supervisor sign-off not required (no D-number changed).
+
+- **P4-detection-rulings** · 2026-10-19 · Where the P4 design departs from the earlier standards and agents (full table with evidence: `docs/superpowers/specs/2026-10-19-p4-detection-design.md`): (1) frozen detectors still **score** but do not learn; (2) `freeze(service, ts)` per service; (3) Z-score window is 60 samples, `min_samples=10`; (4) `Anomaly` and the stream `Incident` live in `common/` (DAG), `detection/anomaly.py` re-exports; (5) per-metric absolute and relative std floors replace `std or 1e-9`; (6) state is per `(service, metric)` and counters are scored on their increase; (7) incident states are the surface-map set, "updating" is a `revision` bump; (8) the freeze is a renewable lease of `BASELINE_FREEZE_WINDOW`; (9) P4 ships a minimal per-service tracker because D4 needs incident state; (10) the log detector is a count spike, not a ratio (collectors send no totals); (11) env scheme `INFRAMIND_DETECTION_<DETECTOR>_<PARAM>` plus the existing `BASELINE_FREEZE_WINDOW`; (12) windows and decay use the signal's `ts`, not the wall clock; (13) resource gauges and counters alert **upward only**. · Why: each was a contradiction between the standard, the agent files, the DAG or the data; 11 and 12 follow D6; 5 and 13 are measured on 6244 recorded signals (0.8% false fires on quiet CPU with the 1e-9 floor, 6 of 6 metric anomalies were CPU drops when traffic stopped). · Alternatives: keep the standard's text (a frozen detector that goes silent, a two-sided gauge that alerts on idleness). · Status: applied in code, standards 01/05/10, `surface-map.md` and the detection/correlation agents; no D-number changed, so no supervisor sign-off is required.
+
+- **D2-Chaos-runtime (PROPOSED, not applied)** · 2026-10-19 · Run chaos-daemon with `chaosDaemon.runtime: containerd` and `socketPath: /run/containerd/containerd.sock`, and drop the `/var/run/docker.sock` `extraMounts` workaround, in `testbed/helm-values/chaos-mesh.yaml` and `testbed/kind/cluster.yaml`. · Why: with `runtime=docker` against a containerd node the daemon rejects every container id (`expected docker:// but got container`), so StressChaos and NetworkChaos never inject; only PodChaos (API-level) works, and the P1 smoke gate tests only pod-kill. NetworkChaos also needs the host kernel modules `sch_netem`, `ip_set_hash_ipport`, `ip_set_hash_net`. · Alternatives: keep the docker shim and rewrite container ids (unsupported). · Status: proposed; needs user approval, a `make chaos` re-run, and a `make smoke-testbed` check that includes a StressChaos injection. **Carried into P7 as [D26-Chaos-runtime-blocked](#d26-chaos-runtime-blocked-stressnetwork-chaos-is-blocked-podchaos-is-the-live-path): the 6 affected scenarios now ship written and marked `blocked`, and the harness refuses to score them.**
+
+- **D7-Replay** · 2026-10-21 · The evaluation harness's reproducibility mechanism is **signal-time replay** from an NDJSON fixture (`evaluation/fixtures/<scenario>/signals.ndjson`), not a cluster-backed re-run. `runner/replay.py` re-feeds a fixture through detection → correlation → ranking and is byte-identical across repeats. The live path (`runner/live.py`) asserts a `kind-*` kubeconfig context, refuses blocked scenarios, and ships with `run_scenario` as `NotImplementedError` pending the fixture recorder. · Why: the pipeline consumes the `Signal` stream's `ts` values end-to-end (D6 property), so pinning signal time pins the whole pipeline's output. Replay is the only path that runs green on a dev box with no docker daemon; live runs become a way to *produce* fixtures, not to score them. · Alternatives: (a) wall-clock re-runs — rejected, not reproducible across hosts. (b) mocking the pipeline — rejected, does not exercise the production path. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/10-evaluation.md` §10.2; `tests/integration/test_evaluation_replay.py`.
+
+- **D26-Chaos-runtime-blocked** · 2026-10-21 · While D2-Chaos-runtime is still pending, the 6 Stress/NetworkChaos scenarios (dev-04..07, test-04..05) ship **written and marked blocked** (`status: blocked`, `# block_status: d2_chaos_runtime_docker`). The harness refuses to run them by default (exit code 3); with `--allow-blocked` it writes rows with `blocked=True` and `detected=False`, never a fabricated accuracy. The blocked marker is asserted by a test. · Why: recording the blocker as an artefact (rather than deleting the scenarios or silently scoring them zero) preserves D6's locked "≥12 distinct scenarios" promise while honouring PUKU.md's "never invent a number". · Alternatives: (a) delete the blocked scenarios — rejected, reduces dev to 4 and test to 4 scenarios and breaks the locked coverage. (b) score them as zero — rejected, fabricated number. · Status: approved by team as a P7 deliverable; the underlying D2-Chaos-runtime runtime change is still proposed. Cross-ref: `docs/standards/10-evaluation.md` §10.3; `test_blocked_scenarios_are_all_stress_or_network_chaos`.
 
 ### Proposed deviations from the July 2026 proposal (supervisor approval pending)
 

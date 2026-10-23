@@ -1,0 +1,29 @@
+# Dev split scenario 03 — PodChaos pod-kill on productcatalogservice.
+# productcatalogservice is a leaf callee of cartservice, so this is the two-hop case.
+scenario_id: dev-podchaos-03-productcatalogservice-pod-kill
+set: dev
+seed: 1003
+fault_type: pod_kill
+target_service: productcatalogservice
+target_namespace: boutique
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: productcatalogservice
+expected_affected_services:
+  - productcatalogservice
+  - cartservice
+  - front-end
+chaos:
+  kind: PodChaos
+  spec:
+    action: pod-kill
+    mode: one
+    selector:
+      label: app
+      value: productcatalogservice
+metrics_to_assert:
+  - http_requests_total
+  - http_request_duration_seconds_bucket
+repeats: 5
+status: runnable

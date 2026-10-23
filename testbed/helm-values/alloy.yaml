@@ -1,0 +1,60 @@
+# testbed/helm-values/alloy.yaml
+#
+# Grafana Alloy: ships pod logs to Loki. Without a shipper Loki is empty and
+# the P1 gate ("Prometheus, Loki and Jaeger all see the fault") cannot pass.
+#
+# Runs as a single Deployment and reads logs through the Kubernetes API
+# (loki.source.kubernetes), so it needs no hostPath mounts and no
+# per-node DaemonSet on the 1c1w slim cluster.
+#
+# Labels attached to every stream (the smoke test and later phases query
+# on these): namespace, pod, container, app.
+alloy:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 96Mi
+    limits:
+      cpu: 300m
+      memory: 256Mi
+  configMap:
+    create: true
+    content: |
+      discovery.kubernetes "pods" {
+        role = "pod"
+      }
+
+      discovery.relabel "pods" {
+        targets = discovery.kubernetes.pods.targets
+
+        rule {
+          source_labels = ["__meta_kubernetes_namespace"]
+          target_label  = "namespace"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_name"]
+          target_label  = "pod"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_container_name"]
+          target_label  = "container"
+        }
+        rule {
+          source_labels = ["__meta_kubernetes_pod_label_app"]
+          target_label  = "app"
+        }
+      }
+
+      loki.source.kubernetes "pods" {
+        targets    = discovery.relabel.pods.output
+        forward_to = [loki.write.default.receiver]
+      }
+
+      loki.write "default" {
+        endpoint {
+          url = "http://loki-gateway.monitoring.svc.cluster.local/loki/api/v1/push"
+        }
+      }
+controller:
+  type: deployment
+  replicas: 1

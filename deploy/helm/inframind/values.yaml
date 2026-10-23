@@ -1,0 +1,162 @@
+# InfraMind chart defaults.
+#
+# Sane for a `kind` cluster running alongside Online Boutique + kube-prometheus-stack.
+# Production-scale values are out of scope (D8).
+#
+# HARD RULE: no real secret ever appears in this file. `secretRef.*` values are placeholders
+# populated at install time via `--set` or an external-secrets operator
+# (docs/standards/11-helm-packaging.md section 11.4).
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  # Matches pyproject.toml's [project.urls] Homepage. `make up-app` builds this tag locally and
+  # the chart pulls it into the kind cluster via `imagePullPolicy: IfNotPresent`.
+  repository: ghcr.io/rifatbond007/inframind-core
+  tag: "0.0.0"
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+# --- sizing ---
+# One replica per Deployment (D8: no HPA). The RCA worker is the heaviest — it holds the
+# in-memory ServiceGraph (D21) and shells out to the LLM synchronously.
+resources:
+  requests:
+    cpu: 200m
+    memory: 256Mi
+  limits:
+    cpu: "1"
+    memory: 1Gi
+
+resourcesRca:
+  requests:
+    cpu: 200m
+    memory: 512Mi
+  limits:
+    cpu: "1"
+    memory: 2Gi
+
+# --- backend wiring ---
+# Every Deployment gets `envFrom: [configMapRef: inframind-config]`, so anything set under
+# `config:` below lands as an env var verbatim. See templates/configmap.yaml.
+config:
+  REDIS_URL: "redis://inframind-redis:6379/0"
+  POSTGRES_URL: "postgresql://inframind:inframind@inframind-postgres:5432/inframind"
+  PROMETHEUS_URL: "http://kube-prometheus-stack-prometheus:9090"
+  LOKI_URL: "http://loki:3100"
+  JAEGER_URL: "http://jaeger-query:16686"
+  ALERTMANAGER_WEBHOOK_URL: "http://inframind-api:8080/webhooks/alertmanager"
+  METRICS_PORT: "9100"
+  # Per-stage tuning. Keyed INFRAMIND_<LAYER>_<FIELD>; see docs/surface-map.md.
+  INFRAMIND_RCA_GRAPH_PATH: "/app/data/service-graph.json"
+  INFRAMIND_WATCH_NAMESPACES: "boutique,inframind"
+
+# --- secrets ---
+# Placeholders only. Populated at install time:
+#   helm upgrade --install inframind deploy/helm/inframind \
+#     --set secretRef.LLM_API_KEY="$OPENAI_API_KEY"
+secretRef:
+  LLM_API_KEY: ""
+  INFRAMIND_ALERT_WEBHOOK_SECRET: ""
+
+# Alternatively point the chart at Secrets you manage yourself and it will not create one.
+existingSecret: ""
+
+# --- api ---
+api:
+  replicaCount: 1
+  port: 8080
+  # Postgres can take a while to accept connections on a cold kind start; the startup probe
+  # gives it 30 x 2s = 60s before the liveness probe starts counting.
+  startupProbe:
+    failureThreshold: 30
+    periodSeconds: 2
+  livenessProbe:
+    path: /healthz
+    periodSeconds: 10
+    timeoutSeconds: 3
+  readinessProbe:
+    path: /readyz
+    periodSeconds: 10
+    timeoutSeconds: 3
+
+# --- rca ---
+rca:
+  replicaCount: 1
+  # D21 cold start: an emptyDir at /app/data. The Jaeger collector writes
+  # service-graph.json on first observation; a missing file is a cold graph, never a crash.
+  graphData:
+    medium: Memory
+    sizeLimit: 64Mi
+
+# --- service discovery ---
+service:
+  type: ClusterIP
+  port: 8080
+
+# D8: no public-facing Ingress. The template ships disabled; a team that wants one adds it on
+# top of the chart. Disabled by default and lint-clean either way.
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts:
+    - host: inframind.local
+      paths:
+        - path: /
+          pathType: Prefix
+  tls: []
+
+# --- observability ---
+# The six metrics (standard 11 section 11.12) come from `inframind.metrics`, which every
+# process registers at import time.
+metrics:
+  enabled: true
+  # Worker pods serve /metrics here via prometheus_client.start_http_server.
+  workerPort: 9100
+
+serviceMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+podMonitor:
+  enabled: false
+  interval: 30s
+  scrapeTimeout: 10s
+  labels: {}
+
+# --- security context ---
+# runAsNonRoot + the image's baked-in uid 10001 (see Dockerfile). The RCA worker additionally
+# needs to write /app/data, which the emptyDir makes group-writable.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 10001
+  runAsGroup: 10001
+  fsGroup: 10001
+
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: false
+  capabilities:
+    drop:
+      - ALL
+
+# --- rbac ---
+rbac:
+  create: true
+  # D22: change correlation watches these six resource kinds. Read-only — no write, no exec.
+  # A Role that needs pods/exec is wrong (standard 11 section 11.5).
+  watchNamespaces: []
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
