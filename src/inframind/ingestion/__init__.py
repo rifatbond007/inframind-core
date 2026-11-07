@@ -1,11 +1,11 @@
-"""Ingestion: pull signals from external systems and push them onto the event bus.
+"""Ingestion: pull signals from the observability backends and publish them to the event bus.
 
-Planned collectors (Step 3):
+Collectors (each runs with ``python -m inframind.ingestion.<name>``):
 
-* Prometheus — PromQL scrape / query API.
-* Loki — query_range API.
-* Jaeger / OTLP — trace query API or OTLP receiver.
-* Alertmanager — webhook receiver (FastAPI route).
+* ``prometheus`` — per-pod CPU, memory and restarts from ``query_range``.
+* ``loki`` — warning/error log lines from ``query_range``.
+* ``jaeger`` — error spans, per-service latency, and ``GraphUpdate`` call edges.
 
-Output: Redis Streams with idempotent consumers.
+``runner`` is the shared process wrapper. The Alertmanager webhook is the only push ingress; it
+lives in ``inframind.api.alertmanager`` because only ``api`` may import FastAPI.
 """

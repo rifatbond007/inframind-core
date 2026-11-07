@@ -1,0 +1,32 @@
+# block_status: d2_chaos_runtime_docker
+#
+# Dev split scenario 05 — StressChaos memory-stress on payment-service.
+# BLOCKED: same D2-Chaos-runtime limitation as scenario 04.
+scenario_id: dev-stresschaos-05-payment-service-memory-stress
+set: dev
+seed: 1005
+fault_type: memory_stress
+target_service: payment-service
+target_namespace: boutique
+duration_s: 240
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: payment-service
+expected_affected_services:
+  - payment-service
+  - checkout
+  - front-end
+chaos:
+  kind: StressChaos
+  spec:
+    action: stress-mem
+    mode: one
+    selector:
+      label: app
+      value: payment-service
+metrics_to_assert:
+  - container_memory_working_set_bytes
+  - container_oom_events_total
+repeats: 5
+status: blocked
+block_reason: d2_chaos_runtime_docker

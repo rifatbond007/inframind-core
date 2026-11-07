@@ -81,6 +81,12 @@ Only the things that every other stage genuinely needs:
 | `exceptions.py` | The domain exception hierarchy (`IngestionError`, `DetectionError`, `RcaError`, ...). |
 | `time.py` | The `utcnow()` helper. Every collector and detector uses it; never `datetime.utcnow()` directly. |
 | `ids.py` | The ULID generator. Every `Signal.id`, `Incident.id`, `Candidate.id`. |
+| `bus.py` | Redis Streams `publish`, `publish_graph_update`, `publish_incident` and the idempotent `SignalConsumer`. |
+| `graph_update.py` | The `GraphUpdate` call-edge sample on `stream:graph-updates` (D21). |
+| `anomaly.py` | The `Anomaly` wire model (standard 05 §5.6). |
+| `incident.py` | The `Incident` wire model on `stream:incidents` (surface-map "Incidents out"). |
+| `collector_state.py` | Cursor and seen-key state that survives a collector restart. |
+| `redact.py` | Secret/PII redaction applied before text reaches the bus or an LLM (D9). |
 
 If you find yourself reaching for a third-party utility, ask: would this be useful to every
 stage? If yes, it belongs here. If no, it belongs in the stage that needs it.

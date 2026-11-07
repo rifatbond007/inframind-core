@@ -27,10 +27,10 @@ jobs:
           python-version: ${{ env.PY_VERSION }}
           cache: pip
 
-      - name: Install (lint-only subset)
+      - name: Install (dev extras, same as local)
         run: |
           python -m pip install --upgrade pip
-          pip install "ruff>=0.4" "mypy>=1.10"
+          pip install -e ".[dev]"
 
       - name: Ruff check
         run: ruff check src tests
@@ -75,6 +75,35 @@ jobs:
             https://github.com/hadolint/hadolint/releases/download/v2.12.0/hadolint-Linux-x86_64
           sudo chmod +x /usr/local/bin/hadolint
 
+      # Blocking as of P8. The `|| true` that used to sit here was a Step-0 placeholder; the
+      # Dockerfile is now the production image the chart deploys, so a lint failure is a real
+      # finding. `--failure-threshold warning` matches `make hadolint`.
       - name: Lint Dockerfile
-        run: hadolint Dockerfile || true  # don't block Step 0; tighten in phase 9
-        continue-on-error: true
+        run: hadolint --failure-threshold warning Dockerfile
+
+  helm-lint:
+    name: helm chart lint
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Helm
+        uses: azure/setup-helm@v4
+        with:
+          version: v3.15.4
+
+      # Standard 11 section 11.7: a red `helm lint` blocks merge. The script additionally
+      # asserts the four-Deployment shape (D27) and that no real secret renders.
+      - name: Lint and render the chart
+        run: bash deploy/helm/inframind/tests/helm-lint.sh
+
+      - name: Package the chart
+        run: helm package deploy/helm/inframind -d /tmp/chart
+
+      - name: Upload the packaged chart
+        uses: actions/upload-artifact@v4
+        with:
+          name: inframind-chart
+          path: /tmp/chart/*.tgz
+          retention-days: 7

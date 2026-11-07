@@ -1,7 +1,7 @@
 ---
 name: reference-verifier
 description: "Verifies every reference in paper/references.bib and proposal.pdf (authors, title, year, venue, DOI/URL). Removes or fixes anything that cannot be confirmed."
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, WebSearch, WebFetch
 ---
 

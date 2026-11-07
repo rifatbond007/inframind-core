@@ -1,0 +1,31 @@
+# block_status: d2_chaos_runtime_docker
+#
+# Test split scenario 05 — NetworkChaos latency injection on checkout's egress.
+# BLOCKED: same D2-Chaos-runtime limitation as the dev network scenarios.
+scenario_id: test-networkchaos-05-checkout-latency
+set: test
+seed: 2005
+fault_type: network_latency
+target_service: checkout
+target_namespace: boutique
+duration_s: 240
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: checkout
+expected_affected_services:
+  - checkout
+  - front-end
+chaos:
+  kind: NetworkChaos
+  spec:
+    action: delay
+    mode: all
+    selector:
+      label: app
+      value: checkout
+metrics_to_assert:
+  - http_request_duration_seconds_bucket
+  - http_requests_total
+repeats: 5
+status: blocked
+block_reason: d2_chaos_runtime_docker

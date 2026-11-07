@@ -13,13 +13,16 @@ disagree, the standard wins.
 ```
 testbed/
 ├── README.md          (this file — operational runbook)
-├── kind/              (cluster.yaml + bootstrap.sh — lands in P1 slice 2)
-├── helm-values/       (per-component values — lands in P1 slice 3 + 4)
-├── boutique/          (Online Boutique kustomize — lands in P1 slice 4)
-└── chaos/             (Chaos Mesh CRs — lands in P1 slice 4)
+├── kind/              (cluster.yaml + bootstrap.sh)
+├── obs/               (install.sh + jaeger-nodeports.yaml)
+├── helm-values/       (kube-prometheus-stack, loki, alloy, jaeger, chaos-mesh)
+├── boutique/          (Online Boutique kustomize + memory/tracing patches)
+├── chaos/             (5 Chaos Mesh CRs + install.sh)
+├── smoke.sh           (the P1 -> P2 gate)
+└── smoke_ingestion.py (the P3 gate: API + collectors + a real Alertmanager alert)
 ```
 
-The full `make up` chain is the P1 slice 5 deliverable.
+`make up` runs the whole chain: kind, obs, boutique, chaos, then Compose.
 
 ## 2. Prerequisites
 
@@ -82,7 +85,54 @@ the pod-kill chaos assertion from the P1 → P2 phase gate:
 | 3 | Prometheus `/api/v1/status/runtimeinfo` | 200 OK |
 | 4 | Loki `/loki/api/v1/status/buildinfo` (through gateway) | 200 with `version` field (the gateway's nginx doesn't proxy `/ready`; the pod's own readiness probe uses `/ready` directly and is passing — verified by `kubectl get pod loki-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'` = `True`) |
 | 5 | Jaeger UI `/` | HTML page loads |
-| 6 | Apply `testbed/chaos/pod-kill.yaml`, wait 30s | Prometheus records a `kube_pod_container_status_restarts_total` increment **and** Loki shows a `Killing` log line **and** Jaeger shows a `frontend` trace ending in error within the last 5 min |
+| 6 | Re-create `testbed/chaos/pod-kill.yaml`, wait up to 90s | Prometheus shows a **newer** `kube_pod_created` for the frontend (pod-kill replaces the pod, so the restart counter never moves) **and** Loki has logs from the killed pod and its replacement (Alloy ships pod logs) **and** Jaeger has `frontend` traces (smoke sends a few requests through a port-forward, because the load generator is scaled to 0) |
+
+### Watching a fault: `make observe-fault`
+
+`make observe-fault [CHAOS_CR=testbed/chaos/<file>.yaml]` starts the API and the three collectors,
+drives steady frontend traffic, injects one fault, and prints a per-30-second timeline (graph-edge
+latency, span p95, CPU, errors, alerts) with the fault window marked. Output is kept under
+`testbed/.observe/<run-id>/` (git-ignored). It applies a **copy** of the CR with a unique name and
+a `duration` equal to the fault window, so the fault ends by itself and the repo's CR is never
+deleted or re-applied.
+
+`NetworkChaos` (`network-delay.yaml`) needs host kernel modules that are not loaded by default:
+`sudo modprobe sch_netem ip_set_hash_ipport ip_set_hash_net`, persisted with
+`/etc/modules-load.d/inframind-chaos.conf`. Without them Chaos Mesh reports
+`unable to flush ip sets`, the fault never happens, and deleting it hangs because it cannot be
+recovered; the script refuses to start in that case and says how to fix it.
+
+### P4 detection gate
+
+`make smoke-detection` runs `testbed/smoke_detection.py` (about 7 minutes: the detectors need real
+warm-up and cAdvisor refreshes every 30 s). It runs the three collectors and the correlation worker
+(in-process, on a throwaway consumer group at the stream tail, writing to its own incidents stream),
+warms the baselines on a trickle of traffic, then hits the frontend with 40 parallel clients:
+
+| Check | Pass condition |
+|---|---|
+| `quiet` | no incident opens during the quiet minute before the burst |
+| `detected` | an incident for `frontend` opens within 60 s of the burst starting (the proposal's MTTD) |
+| `frozen` | the incident's later anomalies were all scored against one constant, frozen baseline (D4) |
+| `resolved` | the incident resolves within the cooldown plus 150 s after the burst ends |
+
+### P3 ingestion gate
+
+`make smoke-ingestion` runs `testbed/smoke_ingestion.py` against the live testbed. It starts the
+API and the Prometheus, Loki and Jaeger collectors, sends traffic through the frontend (including
+one uniquely tagged failing request) and one synthetic alert through the real Alertmanager, then
+checks the real streams:
+
+| Check | Pass condition |
+|---|---|
+| C1 | Redis, Prometheus, Loki, Jaeger and Alertmanager are reachable |
+| C4 `prometheus` | metric signals for at least 6 distinct services |
+| C4 `loki` | a `frontend` error with `grpc_code=NotFound` carrying this run's id |
+| C4 `jaeger-edges` | graph updates for `frontend->productcatalogservice`, `frontend->recommendationservice`, `recommendationservice->productcatalogservice` |
+| C4 `jaeger-error` | an error-span signal with a 32-hex `trace_id` carrying this run's id |
+| C4 `alertmanager` | the synthetic alert arrives as a `frontend` Alertmanager signal |
+
+Port 8080 must be free: the in-cluster Alertmanager receiver posts to the host on 8080.
 
 A green smoke test is the precondition for any later phase work. If any
 check is red, `make down` and start over — do not investigate mid-state
@@ -118,12 +168,18 @@ landed on `dev-rifat`; rows from those slices apply today.**
 | [S3] `kube-prometheus-stack` | Prometheus pod is `OOMKilled` | The 768 MiB cap is too tight for your scrape volume | Drop to 512 MiB in `testbed/helm-values/kube-prometheus-stack.yaml` and reduce `retention` to 4h. The header comment in that file documents the levers. |
 | [S3] `loki` | Loki pod is `OOMKilled` | WAL growth because `compactor.replicas=0` | Acceptable for short P1 dev runs. For longer ones, enable the compactor in the values file. |
 | [S3] `loki` | `curl http://localhost:30100/ready` returns 404 | The chart's gateway nginx doesn't proxy `/ready` (it tries to serve it as a static file). Loki itself is ready — verify with `kubectl get pod -n monitoring loki-0 -o jsonpath='{.status.conditions[?(@.type=="Ready")].status}'` (returns `True`) or `curl http://localhost:30100/loki/api/v1/status/buildinfo` (returns the version). The slice 5 smoke test uses the buildinfo path. |
+| [S2] host | Pods CrashLoop with `too many open files` (Chaos Mesh controller, Prometheus, Loki) | The host's `fs.inotify.max_user_instances` (default 128) is exhausted by the kind nodes plus every pod's watchers | `sudo sysctl -w fs.inotify.max_user_instances=1024 fs.inotify.max_user_watches=524288`; persist in `/etc/sysctl.d/99-kind.conf`. `bootstrap.sh` fails fast below 512. |
+| [S4] `chaos-mesh` | CRs are accepted but nothing happens (empty `.status`, no events, no pod killed) | Either `enabledControllers` was restricted (disables Chaos Mesh's shared lifecycle controllers) or `clusterScoped: false` (controller ignores CRs outside `targetNamespace`) | Keep both at the chart defaults / `clusterScoped: true`, as in `helm-values/chaos-mesh.yaml`. |
+| [S3] `loki` | `/loki/api/v1/labels` returns `too many unhealthy instances in the ring` | Single binary without `commonConfig.replication_factor: 1` | Set in `helm-values/loki.yaml`. `buildinfo` passes even when this is broken. |
+| [S3] `jaeger` | Services send traces but the UI shows none, or `connection refused` on 4317 | (a) collector and query as separate pods with in-memory storage do not share spans; (b) OTLP receiver bound to localhost | Jaeger runs allInOne with `COLLECTOR_OTLP_*_HOST_PORT=0.0.0.0:*`; NodePorts come from `obs/jaeger-nodeports.yaml`. Migrating an old release needs `helm uninstall jaeger -n monitoring` first. |
+| (always) | `make up` fails with `connection refused` / `EOF` right after "cluster already exists" | Node containers stopped or wedged (host reboot, containerd sandbox reservations) | `bootstrap.sh` restarts the nodes and waits; if still wedged: `make down && make up`. |
 | (always) | `kubectl` complains about the wrong context | You ran a command without `--context kind-inframind` | Always pass `--context kind-inframind`, or `kubectl config use-context kind-inframind` once per session. This is the **most-violated rule** (standard 09 §9.5). |
 | [S4] `boutique` | Online Boutique pods `Pending` or `OOMKilled` | Insufficient cluster resources, or uncapped services hitting the 7 GiB ceiling | Drop the per-service limits in `testbed/boutique/memory-patches.yaml`. Slice 4 caps all 11 services. |
 | [S4] `chaos-mesh` | `oom-kill` CR fires but the wrong container is killed | The CR targets `app=frontend` without an explicit `containerNames`; a future OTel sidecar would be the first container in the Pod and would be killed instead of `server` | `testbed/chaos/oom-kill.yaml` pins `containerNames: [server]`. The deterministic container-kill is distinct from `stress-memory` (which holds memory until the kernel OOM-killer fires — that one is non-deterministic about *which* process is killed and uses `oomScoreAdj: 1000` to bias the kernel toward the stress-allocator). |
 | [S2] `cluster.yaml` | Port already in use (9090/3100/16686/9093/4317/4318) | A previous run, a sibling project, or a host service | Stop the other consumer, or change the host-side `extraPortMappings` in `testbed/kind/cluster.yaml`. 4317/4318 (OTLP) are added in slice 2. |
 | [S3] `jaeger` | Jaeger UI loads but `curl /api/services` is empty | Boutique's OTel sidecar is exporting OTLP but the Jaeger allInOne image is not configured to accept it | Verify the chart values file sets the OTLP receiver config. Slice 3 documents the exact path. |
-| [S5] `make smoke-testbed` | C6 prom restart counter does not increase after 90s (or first run of the gate) | The pod-kill CR fires once on apply and the 90s wait may be tight on a cold cache; the chaos-daemon needs ~5s to inject the kill | Re-apply the CR (`make chaos` re-runs the apply step) and re-run `make smoke-testbed`. The Loki `Killing` line is the next most reliable signal — it appears in the 2-min window after each kill. Jaeger is best-effort: OTel may not be wired in the slim default. |
+| [S5] `make observe-fault` | `FAIL: NetworkChaos needs kernel modules not loaded on this host` (or `describe` shows `AllInjected False`, `unable to flush ip sets`, and `kubectl delete` of the CR hangs) | The host kernel lacks `sch_netem` / `ip_set_hash_*`; kind shares the host kernel | `sudo modprobe sch_netem ip_set_hash_ipport ip_set_hash_net`, then persist via `/etc/modules-load.d/`. |
+| [S5] `make smoke-testbed` | C6 prom fails: no new frontend pod after 90s | The pod-kill CR fires once on apply and was not reconciled (see the Chaos Mesh row above), or the chaos-daemon is down | `kubectl -n chaos-testing describe podchaos boutique-frontend-pod-kill` (look for `Injected`); `kubectl -n chaos-mesh get pods`. |
 
 For deeper landmines, read [`docs/standards/09-testbed-ops.md`](../standards/09-testbed-ops.md) §9.4 in full.
 

@@ -1,16 +1,39 @@
 # InfraMind — local dev stack.
-# Step 0: only Redis (event bus) and PostgreSQL (incident store).
 #
-# Why these two and nothing else:
-#   * The K8s testbed (kind, Prometheus, Loki, Jaeger, Chaos Mesh, Online Boutique)
-#     is provisioned in Step 1 via `make up` and lives under testbed/.
-#   * InfraMind services run locally via `uvicorn` during development, or from the
-#     project Dockerfile once Step 8 lands.
+# Two ways to run InfraMind:
+#   * This file — the non-Kubernetes path. Redis + Postgres plus the four pipeline
+#     processes, each in its own container, all from the root `Dockerfile`.
+#   * `deploy/helm/inframind/` — the Kubernetes path. `make up-app` installs the chart
+#     into the kind cluster next to Online Boutique and the observability stack.
+#
+# The collectors (prometheus / loki / jaeger) reach the testbed backends through
+# `host.docker.internal`, which is the cross-platform way for a containerised process to
+# reach the kind cluster's NodePorts. On Linux this needs
+# `extra_hosts: ["host.docker.internal:host-gateway"]`, wired per service below.
 #
 # Usage:
-#   make up     # start
-#   make down   # stop + remove volumes
-#   make logs   # tail
+#   docker compose up -d          # all six InfraMind processes + both backends
+#   make up-app                   # the Helm path instead
+#   make logs                     # tail
+
+x-common-env: &common-env
+  REDIS_URL: redis://redis:6379/0
+  POSTGRES_URL: postgresql://inframind:inframind@postgres:5432/inframind
+  # The testbed's NodePorts, reached from inside a container.
+  PROMETHEUS_URL: http://host.docker.internal:30090
+  LOKI_URL: http://host.docker.internal:30100
+  JAEGER_URL: http://host.docker.internal:30686
+  # D9: a dev-only placeholder. Never a real secret, never committed.
+  INFRAMIND_ALERT_WEBHOOK_SECRET: dev-secret
+  METRICS_PORT: "9100"
+
+x-common-build: &common-build
+  build:
+    context: .
+    dockerfile: Dockerfile
+
+x-common-extra-hosts: &common-extra-hosts
+  - "host.docker.internal:host-gateway"
 
 services:
   redis:
@@ -48,6 +71,105 @@ services:
       timeout: 3s
       retries: 10
       start_period: 10s
+
+  # --- pipeline ---
+
+  api:
+    <<: *common-build
+    image: inframind:dev
+    container_name: inframind-api
+    restart: unless-stopped
+    command: ["python", "-m", "inframind.api.app"]
+    ports:
+      - "8080:8080"
+    environment: *common-env
+    extra_hosts: *common-extra-hosts
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+
+  # Detection and correlation are one process (`correlation.worker`): the correlation worker
+  # reads stream:signals, runs the engine, and writes incidents back to the bus. Same
+  # reasoning as the chart's `deployment-detection.yaml`.
+  detection:
+    <<: *common-build
+    image: inframind:dev
+    container_name: inframind-detection
+    restart: unless-stopped
+    command: ["python", "-m", "inframind.correlation.worker"]
+    ports:
+      - "9100:9100"
+    environment: *common-env
+    extra_hosts: *common-extra-hosts
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  rca:
+    <<: *common-build
+    image: inframind:dev
+    container_name: inframind-rca
+    restart: unless-stopped
+    command: ["python", "-m", "inframind.rca.worker"]
+    ports:
+      - "9101:9100"
+    environment: *common-env
+    extra_hosts: *common-extra-hosts
+    # D21 cold start: a bind-mounted directory the RCA worker reads service-graph.json from
+    # and writes it back to. A missing file is a cold graph, never a crash.
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ingestion-prometheus:
+    <<: *common-build
+    image: inframind:dev
+    container_name: inframind-ingestion-prometheus
+    restart: unless-stopped
+    command: ["python", "-m", "inframind.ingestion.prometheus"]
+    ports:
+      - "9102:9100"
+    environment: *common-env
+    extra_hosts: *common-extra-hosts
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ingestion-loki:
+    <<: *common-build
+    image: inframind:dev
+    container_name: inframind-ingestion-loki
+    restart: unless-stopped
+    command: ["python", "-m", "inframind.ingestion.loki"]
+    ports:
+      - "9103:9100"
+    environment: *common-env
+    extra_hosts: *common-extra-hosts
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  ingestion-jaeger:
+    <<: *common-build
+    image: inframind:dev
+    container_name: inframind-ingestion-jaeger
+    restart: unless-stopped
+    command: ["python", "-m", "inframind.ingestion.jaeger"]
+    ports:
+      - "9104:9100"
+    environment: *common-env
+    extra_hosts: *common-extra-hosts
+    # The Jaeger collector is the one that publishes graph updates, so it and the RCA worker
+    # share /app/data — otherwise the RCA worker never sees a cold-start snapshot.
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      redis:
+        condition: service_healthy
 
 volumes:
   redis-data:

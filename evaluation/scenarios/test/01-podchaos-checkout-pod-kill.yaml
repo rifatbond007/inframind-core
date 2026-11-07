@@ -1,0 +1,27 @@
+# Test split scenario 01 — PodChaos pod-kill on checkout.
+# Scored once (D6). Never read by the tuning loop.
+scenario_id: test-podchaos-01-checkout-pod-kill
+set: test
+seed: 2001
+fault_type: pod_kill
+target_service: checkout
+target_namespace: boutique
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: checkout
+expected_affected_services:
+  - checkout
+  - front-end
+chaos:
+  kind: PodChaos
+  spec:
+    action: pod-kill
+    mode: one
+    selector:
+      label: app
+      value: checkout
+metrics_to_assert:
+  - http_requests_total
+repeats: 5
+status: runnable

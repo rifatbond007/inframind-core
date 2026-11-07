@@ -1,65 +1,36 @@
 # testbed/helm-values/jaeger.yaml
 #
-# Slim-default values for the Jaeger Helm chart (3.3.0).
+# Slim-default values for the Jaeger Helm chart (3.3.0), allInOne strategy.
 #
-# Architecture: the chart 3.3.0 ships TWO deployment strategies:
-#   - `allInOne` (single pod = collector + query + ingester) — we
-#     don't use it; it's `enabled: false` by default and its
-#     Service template uses different key paths
-#   - `collector` + `query` (separate pods) — this is what we
-#     use. The collector pod accepts OTLP on 4317/4318; the query
-#     pod serves the UI on 16686.
+# Why allInOne and not collector + query pods: with `storage.type: memory`
+# each process keeps its own in-memory span store. A separate collector pod
+# receives and stores spans in its memory, while the query pod reads its own
+# (empty) memory, so the UI never shows a trace. allInOne is one process
+# serving both. Spans are lost on pod restart, which is fine for the testbed.
 #
-# D1 FIX (OTLP receiver): the chart 3.3.0's collector template
-# creates the OTLP service ports only when
-# `collector.service.otlp.grpc` or `collector.service.otlp.http`
-# is set. We set both to true-shape objects (port + name +
-# nodePort). The host-side 30317/30318 in testbed/kind/cluster.yaml
-# map to the same nodePort values here.
-#
-# D4 FIX (NodePort): every Service we expose (query UI, OTLP gRPC,
-# OTLP HTTP) is `type: NodePort` so `make smoke-testbed` can curl
-# `localhost:<port>` without a per-pod port-forward.
-#
-# Storage: in-memory for P1 (no PVC, no ES). The chart 3.3.0
-# default is `cassandra` — we override to `memory`.
-#
-# Memory levers if Jaeger OOMs:
-#   1. drop `collector.resources.limits.memory` from 512Mi to 384Mi
-#   2. drop `query.resources.limits.memory` from 256Mi to 192Mi
-#   3. (long runs) switch `storage.type` from `memory` to `badger`
-#      so traces persist across restarts
-#
-# References:
-#   - chart 3.3.0 values: https://github.com/jaegertracing/jaeger/blob/v3.3.0/charts/jaeger/values.yaml
-#   - chart collector-svc.yaml: /tmp/jaeger-chart/jaeger/templates/collector-svc.yaml
-#   - D1 (OTLP receiver): docs/decision-tree.md
-#   - D4 (NodePort requirement): docs/decision-tree.md
-
-# --- Storage backend ---
-# In-memory for P1. No PVC, no ES, no Cassandra.
+# The chart exposes allInOne Services as ClusterIP only. The NodePorts that
+# kind forwards to the host (30686 UI, 30317/30318 OTLP; D1/D4) come from
+# testbed/obs/jaeger-nodeports.yaml, applied by testbed/obs/install.sh.
 storage:
   type: memory
 
-# --- Provision the data store? ---
-# The chart 3.3.0 ships cassandra, elasticsearch, and kafka as
-# sub-charts. By default `provisionDataStore.cassandra: true` —
-# which spins up a 3-replica cassandra StatefulSet we don't need
-# (storage.type=memory). Disable all three so the install doesn't
-# waste ~1 GiB of memory on a dev box.
 provisionDataStore:
   cassandra: false
   elasticsearch: false
   kafka: false
 
-# --- Collector ---
-# Receives traces from clients (Online Boutique's OTel sidecar
-# exports OTLP). Exposes OTLP gRPC + HTTP on NodePort 30317/30318.
-collector:
+allInOne:
   enabled: true
-  replicaCount: 1
+  replicas: 1
   image:
     tag: "1.59"
+  # The OTLP receivers bind to localhost inside the pod by default, so
+  # other pods get "connection refused" on 4317/4318. Bind to all interfaces.
+  extraEnv:
+    - name: COLLECTOR_OTLP_GRPC_HOST_PORT
+      value: "0.0.0.0:4317"
+    - name: COLLECTOR_OTLP_HTTP_HOST_PORT
+      value: "0.0.0.0:4318"
   resources:
     limits:
       cpu: 500m
@@ -67,81 +38,20 @@ collector:
     requests:
       cpu: 100m
       memory: 256Mi
-  # D1 FIX: enable the OTLP receivers. The chart's collector
-  # container reads these from the service ports block.
-  service:
-    type: NodePort
-    annotations: {}
-    grpc:
-      port: 14250
-    http:
-      port: 14268
-    otlp:
-      grpc:
-        enabled: true
-        name: otlp-grpc
-        port: 4317
-        nodePort: 30317
-      http:
-        enabled: true
-        name: otlp-http
-        port: 4318
-        nodePort: 30318
 
-# --- Query ---
-# Serves the Jaeger UI on NodePort 30686 (matches cluster.yaml's
-# extraPortMappings).
+collector:
+  enabled: false
 query:
-  enabled: true
-  replicaCount: 1
-  image:
-    tag: "1.59"
-  resources:
-    limits:
-      cpu: 200m
-      memory: 256Mi
-    requests:
-      cpu: 50m
-      memory: 128Mi
-  service:
-    type: NodePort
-    annotations: {}
-    nodePort: 30686
-    port: 16686
-
-# --- Agent (client-side daemon, not used) ---
+  enabled: false
 agent:
   enabled: false
-  strategyType: DaemonSet
-
-# --- Ingester (Kafka stream consumer, not used) ---
 ingester:
   enabled: false
-
-# --- Sampling (statestrategies, not used) ---
 sampling:
   enabled: false
-
-# --- Provisioning (seed traces, not used) ---
 provisioning:
   enabled: false
-
-# --- All-in-one (the alternative single-pod strategy; we use
-# collector+query instead) ---
-allInOne:
-  enabled: false
-
-# --- Storage cleaner (only relevant for non-memory backends) ---
 storageCleaner:
   enabled: false
-
-# --- HotROD (demo app, not deployed) ---
 hotrod:
   enabled: false
-
-# --- Metrics for the collector + query pods ---
-# kube-prometheus-stack picks up ServiceMonitors in this namespace
-# by default. We pin the namespace explicitly so the smoke test
-# can find the metrics.
-serviceMonitor:
-  enabled: true

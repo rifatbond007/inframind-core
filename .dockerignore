@@ -1,0 +1,50 @@
+# Keep the build context small and secret-free. Anything here never enters the image.
+.git
+.gitignore
+.github
+
+# Local environments and caches — never baked into a layer.
+.venv
+.mypy_cache
+.ruff_cache
+.pytest_cache
+.cache
+.coverage
+.coverage.*
+htmlcov
+
+# Secrets. This is the load-bearing entry on this list.
+.env
+.env.*
+secrets/
+*.pem
+*.key
+
+# Testbed state — kind kubeconfigs and rendered Helm output can exceed 5 MB and carry
+# cluster credentials.
+testbed/.kube
+testbed/.kind*
+testbed/.observe
+testbed/helm-values/rendered
+
+# Docs and agent scaffolding are not runtime inputs.
+docs/
+paper/
+.claude/
+.superpowers/
+CHANGELOG.md
+README.md
+PUKU.md
+AGENTS.md
+CLAUDE.local.md
+*.log
+logs/
+
+# Compose and image definitions themselves — the build reads Dockerfile, not these.
+Dockerfile
+.dockerignore
+docker-compose.yml
+docker-compose.override.yml
+
+# Production path is an emptyDir; the cold-start file is written in-cluster.
+data/

@@ -1,7 +1,7 @@
 ---
 name: testbed-engineer
 description: Owns the kind cluster, observability stack, Chaos Mesh, and the sample microservice application. Lives under testbed/ and deploys the runtime InfraMind will hit.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 
@@ -14,7 +14,7 @@ You build and maintain the runtime that every other agent's code runs against.
 - `testbed/kind/` — kind cluster config, bootstrap script, kubelet flags.
 - `testbed/helm-values/` — Helm values for kube-prometheus-stack, Loki, Jaeger/OTel, Online Boutique, Chaos Mesh.
 - `testbed/chaos/` — Chaos Mesh CRs / `kubectl apply` recipes.
-- `Makefile` target `make up` (currently brings up Redis + Postgres only; your work extends it to the full testbed).
+- `Makefile` target `make up` (runs the full chain: kind, obs, boutique, chaos, then Compose).
 
 ## Default tech choices (locked by CLAUDE.md and proposal §4.3.1)
 

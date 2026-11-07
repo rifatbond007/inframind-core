@@ -1,0 +1,25 @@
+{{- /* The api process exposes `/metrics` on the same port as the REST surface. The
+       ServiceMonitor targets the Service's `http` port; `kube-prometheus-stack` (the in-cluster
+       Prometheus) discovers this resource by label selector and adds the api to its scrape
+       pool. Standard 11 section 11.12. */}}
+{{- if and .Values.serviceMonitor.enabled .Values.metrics.enabled }}
+apiVersion: monitoring.coreos.com/v1
+kind: ServiceMonitor
+metadata:
+  name: {{ include "inframind.fullname" . }}-api
+  labels:
+    {{- include "inframind.labels" . | nindent 4 }}
+    {{- with .Values.serviceMonitor.labels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  selector:
+    matchLabels:
+      {{- include "inframind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: api
+  endpoints:
+    - port: http
+      path: /metrics
+      interval: {{ .Values.serviceMonitor.interval }}
+      scrapeTimeout: {{ .Values.serviceMonitor.scrapeTimeout }}
+{{- end }}

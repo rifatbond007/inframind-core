@@ -1,5 +1,5 @@
-# 5. Add a detector — Z-score / EWMA / error-rate / latency
-> standards · Python conventions · InfraMind. Pairs with the `add-detector` skill in `.claude/skills/add-detector/SKILL.md`. This file is the rationale and the worked Z-score example.
+# 5. Add a detector — Z-score / EWMA / error spike / latency regression
+> standards · Python conventions · InfraMind. Pairs with the `add-detector` skill in `.claude/skills/add-detector/SKILL.md`. This file is the rationale and the worked Z-score example. The design behind it, with the evidence for every default, is `docs/superpowers/specs/2026-10-19-p4-detection-design.md`.
 
 ## 5.1 The shape every detector has
 
@@ -8,179 +8,209 @@ src/inframind/detection/<detector>.py
 ```
 
 ```python
+from inframind.common.anomaly import Anomaly
 from inframind.common.signal import Signal
-from inframind.detection.anomaly import Anomaly
 
 
 class <Name>Detector:
     """Statistical <method> detector. Stateful per service."""
 
-    def __init__(self, ...) -> None: ...
+    name = "<detector>"
+
+    def __init__(self, params: <Name>Params | None = None) -> None: ...
     def update(self, signal: Signal) -> Anomaly | None: ...
-    def freeze(self) -> None: ...
-    def unfreeze(self) -> None: ...
+    def freeze(self, service: str, ts: datetime) -> None: ...
+    def unfreeze(self, service: str) -> None: ...
+    def is_frozen(self, service: str) -> bool: ...
 ```
 
-A detector is a long-lived object. It owns per-service state — rolling windows, EWMA
-coefficients, or whatever the algorithm needs.
+A detector is a long-lived object that owns per-service state: rolling windows, EWMA
+coefficients, or whatever the algorithm needs. The protocol is `detection/base.py:Detector`; the
+four implementations are `zscore.py`, `ewma.py`, `error_spike.py` and `latency_regression.py`,
+run together by `DetectionEngine` (`engine.py`), which is the only entry point the correlation
+worker calls.
 
 ## 5.2 Three methods, three responsibilities
 
-- **`def update(self, signal: Signal) -> Anomaly | None`** — incremental. Called for every
-  signal. Returns `None` most of the time; returns an `Anomaly` when the detector fires.
-- **`def freeze(self)`** — called when an incident opens on a service. The detector stops
-  updating its baseline for that service. D4.
-- **`def unfreeze(self)`** — called when the incident resolves. The detector resumes updating
-  its baseline.
+- **`update(signal) -> Anomaly | None`** — incremental. Called for every signal; each detector
+  ignores the signals it does not model. Returns `None` most of the time and an `Anomaly` when it
+  fires.
+- **`freeze(service, ts)`** — called when an incident opens on a service (D4). The detector
+  stops *learning* that service's baseline. It **keeps scoring** against the frozen baseline.
+- **`unfreeze(service)`** — called when the incident resolves. Learning resumes.
 
-The freeze/unfreeze lifecycle is what makes the system correct under a sustained fault.
-Without it, the fault slowly becomes "normal" and the detector silently stops firing.
+The freeze/unfreeze lifecycle is what makes the system correct under a sustained fault. Without
+it the fault slowly becomes "normal" and the detector silently stops firing. A test pins that
+failure (`test_unfrozen_detectors_absorb_a_sustained_fault`) so nobody mistakes it for a feature.
 
 ## 5.3 The state discipline
 
-- **State is per-service.** A global rolling window is wrong — the noise floor differs across
-  services, and a global window lets a noisy service silence a quiet one.
-- **State is in-memory.** A restart loses the rolling window. That is acceptable: the next
-  window fills in `interval * window_size` seconds.
+- **State is per service**, and for metrics per `(service, metric)`: one service has CPU, memory
+  and restart series with different noise floors, and a shared window would let one metric
+  silence another. A global window is wrong for the same reason across services.
+- **State is in-memory.** A restart loses the rolling window. That is acceptable: the next window
+  fills in `interval * min_samples` seconds (about 5 minutes at the 30 s poll).
 - **State is private.** No module outside `detection/` touches a detector's state.
+- **Time is the signal's own `ts`**, never the wall clock, so replaying recorded signals gives
+  the same anomalies as the live run (D6).
+- **A redelivered signal is a no-op.** The bus is at-least-once; every detector remembers the
+  newest `ts` it processed per series (or the signal id, for event counters) so a duplicate
+  neither double-fires nor double-learns.
+- **Noise floors.** A flat series has a standard deviation near zero, so any wiggle would score
+  enormous. The divisor is `max(std, abs_floor, rel_floor * |mean|)` with a per-metric profile in
+  `detection/config.py`. On the recorded quiet CPU history, the bare near-zero fallback that earlier
+  drafts of this standard used false-fires on 0.8% of samples; the profile gives 0%.
+- **Direction.** Resource gauges (`cpu_cores`, `memory_working_set_bytes`) and counters alert
+  upward only; a service going idle when traffic stops is not a fault. Unprofiled metrics are
+  two-sided.
+- **Counters** (`*_total`) are scored on their per-sample increase; a decrease is a reset (the
+  pod was replaced) and counts as zero.
 
-## 5.4 Worked example: a Z-score detector
+## 5.4 Worked example: the Z-score detector
+
+The real code is `src/inframind/detection/zscore.py`; this is its core.
 
 ```python
-from __future__ import annotations
-
-import math
-from collections import deque
-from dataclasses import dataclass, field
-from typing import Deque
-
-from inframind.common.signal import Signal
-from inframind.detection.anomaly import Anomaly
-from inframind.detection.severity import severity_from_zscore
-
-
-@dataclass
-class _ServiceState:
-    """Per-service rolling state."""
-    window: Deque[float] = field(default_factory=deque)
-    frozen: bool = False
-    mean: float = 0.0
-    std: float = 0.0
-
-
-class ZScoreDetector:
-    """Per-service rolling Z-score on a numeric attribute. Default window 60, threshold 3.0."""
-
-    def __init__(self, window: int = 60, threshold: float = 3.0,
-                 attr: str = "value") -> None:
-        self._window = window
-        self._threshold = threshold
-        self._attr = attr
-        self._state: dict[str, _ServiceState] = {}
-
-    def update(self, signal: Signal) -> Anomaly | None:
-        if signal.type.name != "METRIC":
-            return None
-        value = (signal.attrs or {}).get(self._attr)
-        if not isinstance(value, (int, float)):
-            return None
-
-        st = self._state.setdefault(signal.service, _ServiceState())
-        if st.frozen:
-            return None  # D4: do not update the baseline while an incident is open
-
-        st.window.append(float(value))
-        if len(st.window) > self._window:
-            st.window.popleft()
-        if len(st.window) < 5:  # warm-up
-            return None
-
-        st.mean = sum(st.window) / len(st.window)
-        variance = sum((x - st.mean) ** 2 for x in st.window) / len(st.window)
-        st.std = math.sqrt(variance) or 1e-9
-        z = (value - st.mean) / st.std
-
-        if abs(z) >= self._threshold:
-            return Anomaly(
-                detector="zscore",
-                service=signal.service,
-                signal_id=signal.id,
-                score=z,
-                severity=severity_from_zscore(abs(z)),
-                attrs={"value": value, "mean": st.mean, "std": st.std, "window": len(st.window)},
-            )
+def update(self, signal: Signal) -> Anomaly | None:
+    point = metric_point(signal)               # (metric, value) for a Prometheus metric, else None
+    if point is None:
         return None
-
-    def freeze(self, service: str) -> None:
-        if service in self._state:
-            self._state[service].frozen = True
-
-    def unfreeze(self, service: str) -> None:
-        if service in self._state:
-            self._state[service].frozen = False
+    metric, value = point
+    key = (signal.service, metric)
+    if not self._seen.is_new(key, signal.ts):  # redelivery guard
+        return None
+    profile = profile_for(metric)
+    if profile.counter:                        # score the increase, not the running total
+        delta = self._counters.delta(key, value)
+        if delta is None:
+            return None
+        value = delta
+    window = self._windows.setdefault(key, deque(maxlen=self._params.window))
+    anomaly = self._score(signal, metric, value, window)   # always scored, even when frozen
+    if not self._frozen.is_frozen(signal.service):         # D4: a frozen baseline does not learn
+        window.append(value)
+    return anomaly
 ```
 
-## 5.5 The Anomaly shape
+`_score` needs `min_samples` held, computes `z = (x - mean) / effective_std(...)`, returns `None`
+below `threshold` (or for a downward move on an `"up"` metric) and otherwise an `Anomaly` whose
+`attrs` carry `metric`, `value`, `mean`, `std`, `window`, `threshold` and `frozen`.
+
+## 5.5 The four detectors and their defaults
+
+| Detector | Signal | Algorithm | Defaults (`INFRAMIND_DETECTION_<NAME>_<PARAM>`) |
+|---|---|---|---|
+| `zscore` | Prometheus metric | rolling Z-score per `(service, metric)` | `window=60` samples, `threshold=3.0`, `min_samples=10` |
+| `ewma` | Prometheus metric | exponentially weighted mean and variance | `alpha=0.3`, `sigma_k=3.0`, `min_samples=10` |
+| `error_spike` | Loki warning/error lines, Jaeger error spans | event count in a sliding window against a rolling baseline | `window_s=300`, `min_count=3`, `k=3.0`, `baseline_windows=12` |
+| `latency_regression` | Jaeger `span_latency` polls | p95 against the rolling median, breach must persist | `regression_pct=50`, `min_delta_ms=10`, `min_spans=10`, `consecutive=2`, `window=60` |
+
+- **EWMA vs Z-score.** EWMA has no window edge and follows recent level shifts; with `alpha=0.3`
+  its memory is about three samples, so it is not a slow-ramp detector (a test says so).
+- **Error spike is a count, not a ratio.** The collectors publish only problem lines and never
+  totals, so there is no denominator. Events seen while a service is frozen stay out of the
+  baseline, so a long fault cannot raise its own bar.
+- **Latency persistence.** Real Boutique frontend p95 is bursty (median 16 ms, isolated spikes
+  of 75 ms to 5 s). On recorded data a single breaching poll fires on 16% of polls, two in a row
+  on 2%. Polls with fewer than `min_spans` spans are noise and are neither scored nor learned.
+- **Severity** is coarse and set by each detector: Z-score/EWMA `critical` at 1.5x the threshold
+  (always for a counter), error spike `critical` at twice `min_count`, latency `critical` at 3x
+  the median. Correlation refines it.
+
+## 5.6 The `Anomaly` shape
 
 ```python
-class Anomaly(BaseModel):
-    detector: str           # "zscore", "ewma", "error_rate", "trace_p95"
-    service: str
-    signal_id: str          # back-reference to the source Signal
-    score: float            # raw detector score (z, EWMA residual, etc.)
-    severity: str           # refined severity from the detector
-    attrs: dict[str, Any]   # detector-specific context
+class Anomaly(BaseModel):      # src/inframind/common/anomaly.py, frozen, extra="forbid"
+    id: str                    # ULID
+    ts: datetime               # observation time of the source signal (tz-aware UTC)
+    detector: str              # "zscore" | "ewma" | "error_spike" | "latency_regression"
+    service: str               # canonical lower-kebab
+    signal_id: str             # back-reference to the source Signal
+    score: float               # raw detector score (signed z, residual in sigmas, count/baseline, ratio)
+    severity: Severity         # info | warning | critical
+    attrs: dict[str, Any]      # detector-specific context, always including "frozen"
 ```
 
-The correlation stage (`correlation/`) consumes `Anomaly` objects and groups them into
-incidents. The detector is done when it has produced (or not produced) the `Anomaly`.
+It lives in `common/anomaly.py`, not in `detection/`, because the RCA stage may import only
+`common` and receives anomalies inside `Incident`s on `stream:incidents` (standards 01 §1.3).
+`detection/anomaly.py` re-exports it so `from inframind.detection.anomaly import Anomaly` works.
+`id` and `ts` are additions to the earlier draft: MTTD and windowing need the observation time.
 
-## 5.6 The freeze discipline (D4)
+## 5.7 The freeze discipline (D4)
 
-- **`freeze()`** is called by the correlation stage when a service's `Anomaly` has been
-  promoted into an incident. Until that call, the baseline keeps updating.
-- **`unfreeze()`** is called when the incident transitions to `resolved` or after the
-  configured `BASELINE_FREEZE_WINDOW` expires. The latter is a safety net — if the system
-  forgets to call `unfreeze`, the detector still resumes after the window.
-- A frozen detector still emits `Anomaly` objects; it just stops *updating the baseline*. A
-  fault can therefore keep firing — which is the point.
+- The incident tracker calls `coordinator.freeze(service, ts)` when it opens an incident and
+  **renews** it on every further anomaly. `BaselineFreezeCoordinator` (`freeze.py`) fans the call
+  out to every detector.
+- The freeze is a **lease** of `BASELINE_FREEZE_WINDOW` seconds (default 300). While anomalies
+  keep arriving the lease keeps renewing, so a live incident stays frozen for as long as it fires.
+  If nothing renews it (the tracker went away), the coordinator releases it by signal time on the
+  next signal; that is the safety net D4 describes as the "decay window".
+- `unfreeze(service)` is called when the incident resolves after `cooldown_s` of quiet.
+- A frozen detector **keeps scoring** and so keeps emitting `Anomaly` objects; it just stops
+  learning. A sustained fault therefore keeps firing, which is the point.
+- Known limitation: the sample that triggers the first anomaly is scored before the freeze
+  applies, so it is learned once. The effect is one sample in a 60-sample window.
 
-## 5.7 Tuning protocol
+## 5.8 Tuning protocol
 
 - **Dev split is for tuning.** Thresholds are chosen on `evaluation/scenarios/dev/`. The
   optimisation target is the F1 / MTTD trade-off the team agrees on.
 - **Test split is for the report.** Numbers in the paper come from `evaluation/scenarios/test/`
   only. Tuning on the test set is a paper-disqualifying error.
-- **No fit on production.** The dev split is `evaluation/scenarios/dev/`; the test split is
-  `evaluation/scenarios/test/`. The split is locked at the start of P7 and never re-shuffled.
+- The defaults above are starting values grounded in recorded signals, not tuned results. The
+  split is locked at the start of P7 and never re-shuffled.
 
-## 5.8 Tests
+## 5.9 Tests
 
 ```
-tests/unit/detection/test_zscore.py
-tests/integration/test_zscore_live.py
+tests/unit/detection/test_<detector>.py       # synthetic series with a known spike
+tests/unit/detection/test_replay.py           # recorded real signals, quiet and spiked
+tests/unit/correlation/test_tracker.py        # incident lifecycle and the freeze it drives
+tests/unit/correlation/test_worker.py         # signals in, incidents out
+make smoke-detection                          # the live P4 gate
 ```
 
-- The unit test feeds a synthetic time-series with a known spike and asserts the detector
-  fires with the expected z-score.
-- The integration test runs the detector against a live Prometheus (in the testbed) and asserts
-  the same on a Chaos-Mesh-injected fault.
+- Each unit test feeds a synthetic series with a known spike and asserts the detector fires with
+  the expected score, stays quiet on the baseline and on a flat series, ignores a redelivered
+  signal, and keeps scoring without learning while frozen.
+- `test_replay.py` replays 3516 real CPU/memory samples (`tests/fixtures/README.md`) and asserts
+  no metric anomalies; it fails if the Z-score goes two-sided again or the std floor is lost.
+  It is a regression guard, not an accuracy claim.
+- `make smoke-detection` runs the collectors and the worker against the live testbed, applies a
+  burst of load to the frontend, and checks that an incident opens within 60 s, the later
+  anomalies are scored against one constant frozen baseline, and the incident resolves.
+- Fault injection for the evaluation uses Chaos Mesh; daemon-based faults need the runtime fix
+  proposed in `docs/decision-tree.md` (`D2-Chaos-runtime`).
 
-## 5.9 Hard rules
+## 5.10 Hard rules
 
-- **State is per-service.** No global rolling windows.
-- **Freeze on incident open, unfreeze on resolve.** D4. A detector that ignores freeze is
-  broken even if it scores perfectly on dev.
+- **State is per service** (per `(service, metric)` for metrics). No global rolling windows.
+- **Freeze on incident open, unfreeze on resolve; keep scoring while frozen.** D4. A detector that
+  ignores freeze, or that stops firing under a freeze, is broken even if it scores well on dev.
 - **Tune on dev, report on test.** D6. The two splits are sacred.
 - **No DL in the detector.** D3. Statistical only.
-- **Tunable parameters via env vars.** `INFRAMIND_DETECTION_<DETECTOR>_<PARAM>`. Never via
-  constructor args from a module import — the operator must be able to retune without
-  redeploying code.
+- **Tunable parameters via env vars** `INFRAMIND_DETECTION_<DETECTOR>_<PARAM>` (upper case),
+  loaded by `detection/config.py:load_params`; a bad value raises `ValueError` naming the
+  variable. The freeze lease is `BASELINE_FREEZE_WINDOW`; the incident cooldown is
+  `INFRAMIND_CORRELATION_COOLDOWN_S`.
+- **Use the signal's `ts`, never `datetime.utcnow()`.**
 
-## 5.10 Cross-reference
+## 5.11 The incident tracker and the worker (P4 minimal)
+
+`correlation/tracker.py` (`IncidentTracker`) turns anomalies into `Incident`s: one open incident
+per service, opened by the first anomaly (which freezes the service), updated by later ones, and
+resolved after `cooldown_s` of signal-time quiet (which unfreezes it). It publishes on open, on a
+severity increase and on resolve; `revision` counts publishes. `correlation/worker.py` consumes
+`stream:signals`, runs `DetectionEngine` and the tracker, and publishes to `stream:incidents`
+(`python -m inframind.correlation.worker`). Cross-service windows, fingerprint deduplication and
+the full state machine belong to P4b: one burst on the frontend lifted CPU on six services and
+opened six incidents, which P4b will group.
+
+## 5.12 Cross-reference
 
 - **Skill:** `.claude/skills/add-detector/SKILL.md`.
-- **Locked decisions:** D4 (baseline freeze), D6 (dev/test split), D3 (no DL).
-- **Next stage:** `correlation/` consumes the `Anomaly` and groups them. The freeze lifecycle
-  is wired in `correlation/state.py`.
-- **Evaluation:** `10-evaluation.md` in this set — how the tuned thresholds become numbers.
+- **Locked decisions:** D3 (no DL), D4 (baseline freeze), D6 (dev/test split). Rulings on where
+  this standard changed: `docs/decision-tree.md`, entry `P4-detection-rulings`.
+- **Next stage:** `correlation/` (P4b) groups incidents across services.
+- **Evaluation:** `10-evaluation.md` — MTTD is the time from fault injection to the first
+  `Anomaly.ts`.

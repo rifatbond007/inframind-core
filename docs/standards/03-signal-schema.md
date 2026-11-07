@@ -93,66 +93,71 @@ src/inframind/common/
 
 ## 3.6 Worked example: Prometheus payload -> `Signal`
 
-A Prometheus `query_range` returns rows like:
+Online Boutique's services are gRPC and expose no per-service request metrics (no
+`http_requests_total{service=…}`), so the Prometheus collector reads per-pod resource and restart
+series from cAdvisor and kube-state-metrics. A `query_range` returns rows like:
 
 ```json
 {
-  "metric": {"__name__": "http_requests_total", "service": "frontend", "code": "500"},
-  "values": [[1704067200, "12"], [1704067215, "13"]]
+  "metric": {"namespace": "default", "pod": "frontend-5c744dd6bb-jfpxt"},
+  "values": [[1704067200, "0.012"], [1704067215, "0.014"]]
 }
 ```
 
-The collector unpacks the row, picks the timestamp, the value, and the labels, then maps:
+The collector maps the latest sample (`src/inframind/ingestion/prometheus.py`, `row_to_signal`):
 
 ```python
-def _to_signal(self, raw: dict[str, Any]) -> Signal:
-    metric = raw["metric"]
-    ts_unix, value_str = raw["values"][-1]
+def row_to_signal(name: str, row: dict[str, Any], *, ingested_at: datetime) -> Signal | None:
+    labels = row.get("metric", {})
+    ts_unix, value_str = row["values"][-1]
     return Signal(
-        ts=datetime.fromtimestamp(ts_unix, tz=timezone.utc),
+        ts=datetime.fromtimestamp(float(ts_unix), tz=UTC),
         source=Source.PROMETHEUS,
         type=SignalType.METRIC,
-        service=self._normalise_service(metric["service"]),
-        severity=self._severity_for(metric.get("code", "")),
+        service=service_from_pod(labels["pod"]),
+        severity=Severity.INFO,
         attrs={
-            "metric": metric["__name__"],
+            "metric": name,  # e.g. "cpu_cores"
             "value": float(value_str),
-            "labels": {k: v for k, v in metric.items() if k not in ("__name__", "service")},
-            "ingested_at": utcnow().isoformat(),
+            "labels": {k: v for k, v in labels.items() if k != "__name__"},
+            "ingested_at": ingested_at.isoformat(),
         },
     )
 ```
 
-Two points:
+Three points:
 
-1. `service` is normalised. `frontend` stays `frontend`; `FrontEnd` becomes `frontend`.
-3. `attrs["value"]` is a `float`. Monetary values stay strings until they cross the storage
+1. `service` comes from the pod name via `service_from_pod` (in `common/signal.py`), which strips
+   ReplicaSet and StatefulSet suffixes: `frontend-5c744dd6bb-jfpxt` becomes `frontend`. DaemonSet
+   and control-plane static pods (`kindnet-ab12c`, `etcd-<node>`) are kept whole.
+2. `attrs["value"]` is a `float`. Monetary values stay strings until they cross the storage
    boundary (`storage/`), where the column type is `NUMERIC(20,4)`.
+3. Series with a non-finite latest value (`NaN`, `Inf`) or without a `pod` label produce no signal.
 
 ## 3.7 Worked example: Alertmanager webhook -> `Signal`
 
-The webhook hits `/webhooks/alertmanager` in `api/`. The handler maps:
+The webhook is `POST /webhooks/alertmanager` in `src/inframind/api/alertmanager.py` (only `api/`
+imports FastAPI). It requires `Authorization: Bearer <INFRAMIND_ALERT_WEBHOOK_SECRET>`. One
+notification carries a *group* of alerts, and **every** alert becomes its own `Signal` via the pure
+`alerts_to_signals(payload, request_id=…, ingested_at=…)`:
 
-```python
-def alert_to_signal(payload: dict[str, Any], request_id: str) -> Signal:
-    alert = payload["alerts"][0]
-    labels = alert.get("labels", {})
-    return Signal(
-        ts=parser.parse(alert["startsAt"]),
-        source=Source.ALERTMANAGER,
-        type=SignalType.ALERT,
-        service=normalise_service(labels.get("service", labels.get("job", "unknown"))),
-        severity=_severity_from_status(alert.get("status", "firing")),
-        attrs={
-            "alertname": labels.get("alertname", ""),
-            "labels": labels,
-            "annotations": alert.get("annotations", {}),
-            "request_id": request_id,  # used for redaction-trace audit
-        },
-    )
-```
+- `ts` is the alert's `startsAt`; for a `resolved` alert it is `endsAt`.
+- `severity` is the `severity` label (`critical` or `warning`); a resolved alert is `info`.
+- `service` is resolved in this order: `deployment` label, then `pod` label (through
+  `service_from_pod`), then `service` label, then `job`.
+- `attrs` carry `alertname`, `status`, `fingerprint`, `labels`, `annotations` (redacted),
+  `starts_at`, `ends_at`, `group_key` and `request_id`.
 
-The webhook is the only **push** ingress. Every other collector is a pull.
+**Why `service` is not first.** The Prometheus Operator stamps `service` with the Service of the
+*scrape target*, so every pod-level alert derived from kube-state-metrics carries
+`service="kube-prometheus-stack-kube-state-metrics"`. Trusting that label would blame the
+exporter instead of the workload; the `pod` and `deployment` labels name the affected workload.
+
+An alert that resolves to `unknown` (the always-firing `Watchdog`) is dropped by the bus and
+counted in the response `{"accepted": n, "dropped": m}`. Alertmanager retries on a non-2xx, so a
+bus failure returns 503; a retried group repeats the same `fingerprint`, `starts_at` and `status`,
+which is the key downstream stages deduplicate on. The webhook is the only **push** ingress.
+Every other collector is a pull.
 
 ## 3.8 Hard rules
 

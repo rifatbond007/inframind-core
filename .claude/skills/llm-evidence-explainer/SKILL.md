@@ -13,4 +13,4 @@ Before changing prompts, validators, or adapters:
 2. Enforce D1 and D9 (redaction before any external LLM call; Ollama fallback).
 3. Log the session in `docs/PROGRESS.md` when done.
 
-Owner: llm-explainer agent (`Prome`).
+Owner: llm-explainer agent (`Rifat`, from P5b onward — Prome owns P5 RCA and P6 alerting/storage).

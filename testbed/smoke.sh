@@ -38,7 +38,11 @@ JAEGER_URL="${SMOKE_JAEGER_URL:-http://localhost:30686}"
 COMPOSE_FILE="${COMPOSE_FILE:-$REPO_ROOT/docker-compose.yml}"
 POD_KILL_WAIT_SECONDS="${SMOKE_POD_KILL_WAIT_SECONDS:-90}"
 POD_KILL_POLL_SECONDS="${SMOKE_POD_KILL_POLL_SECONDS:-10}"
-POD_KILL_QUERY='sum(kube_pod_container_status_restarts_total{namespace="default",pod=~"frontend-.*"})'
+# pod-kill deletes the pod and the Deployment creates a new one, so the
+# restart counter (which belongs to the old pod) never moves. The newest
+# frontend pod's creation timestamp does.
+POD_KILL_QUERY='max(kube_pod_created{namespace="default",pod=~"frontend-.*"})'
+CHAOS_DIR="${CHAOS_DIR:-$REPO_ROOT/testbed/chaos}"
 
 FAIL_COUNT=0
 
@@ -138,8 +142,8 @@ check_prometheus() {
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return
   fi
-  if ! jq -e '.data == "success"' "$body_file" >/dev/null 2>&1; then
-    log_fail "C3 prom: 200 but .data != 'success'"
+  if ! jq -e '.status == "success"' "$body_file" >/dev/null 2>&1; then
+    log_fail "C3 prom: 200 but .status != 'success'"
     cat "$body_file" | head -c 200 | while IFS= read -r line; do
       log_warn "    $line"
     done
@@ -230,7 +234,13 @@ check_pod_kill() {
     t0="0"
   fi
 
-  log_info "C6 prom: t0 restart counter = $t0 (polling every ${POD_KILL_POLL_SECONDS}s up to ${POD_KILL_WAIT_SECONDS}s)"
+  # Re-create the CR so the one-shot kill fires inside the polling window.
+  kubectl --kubeconfig "$KUBECONFIG_PATH" --context "$CONTEXT_NAME" \
+    delete -n "$CHAOS_NS" podchaos boutique-frontend-pod-kill --ignore-not-found >/dev/null
+  kubectl --kubeconfig "$KUBECONFIG_PATH" --context "$CONTEXT_NAME" \
+    apply -f "$CHAOS_DIR/pod-kill.yaml" >/dev/null
+
+  log_info "C6 prom: t0 newest frontend pod created = $t0 (polling every ${POD_KILL_POLL_SECONDS}s up to ${POD_KILL_WAIT_SECONDS}s)"
 
   local elapsed=0
   local t1="$t0"
@@ -246,12 +256,12 @@ check_pod_kill() {
     fi
     # Compare numerically (t0 may be "0" or a float)
     if awk -v a="$t1" -v b="$t0" 'BEGIN{exit !(a+0 > b+0)}'; then
-      log_ok "C6 prom: restart counter t1=$t1 > t0=$t0 (kill observed)"
+      log_ok "C6 prom: new frontend pod t1=$t1 > t0=$t0 (kill observed)"
       break
     fi
   done
   if ! awk -v a="$t1" -v b="$t0" 'BEGIN{exit !(a+0 > b+0)}'; then
-    log_fail "C6 prom: restart counter did not increase after ${POD_KILL_WAIT_SECONDS}s (t0=$t0, t1=$t1)"
+    log_fail "C6 prom: no new frontend pod after ${POD_KILL_WAIT_SECONDS}s (t0=$t0, t1=$t1)"
     log_warn "  the pod-kill CR fires once on apply (chaos-mesh 2.7.x removed the per-CR scheduler field)"
     log_warn "  if just installed: re-apply the CR (make chaos) then re-run make smoke-testbed"
     log_warn "  if persistent:    check chaos-daemon logs (kubectl logs -n chaos-mesh -l app.kubernetes.io/name=chaos-daemon)"
@@ -259,43 +269,62 @@ check_pod_kill() {
     return
   fi
 
-  # --- loki Killing line in the last 2 min ---
+  # --- loki: logs from the killed pod AND its replacement ---
+  # `Killing` is a Kubernetes event reason, not a pod log line, so it never
+  # appears in Loki. A pod-kill leaves two distinct frontend pod names in
+  # the stream labels: the one that was killed and the one that replaced it.
   local loki_body="/tmp/inframind-smoke-loki-kill.$$"
   local now_ns="$(date +%s)000000000"
-  local start_ns="$((now_ns - 120000000000))"  # 2 min ago, ns
+  local start_ns="$((now_ns - 900000000000))"  # 15 min ago, ns
   local loki_code=""
-  loki_code="$(curl -sS -o "$loki_body" -w '%{http_code}' --max-time 15 --get \
-    --data-urlencode 'query={namespace="default",pod=~"frontend-.*"} |= "Killing"' \
+  local loki_pods="0"
+  loki_code="$(curl -sS -o "$loki_body" -w '%{http_code}' --max-time 20 --get \
+    --data-urlencode 'query={namespace="default",app="frontend"}' \
     --data-urlencode "start=$start_ns" \
     --data-urlencode "end=$now_ns" \
-    --data-urlencode 'limit=1' \
+    --data-urlencode 'limit=500' \
     "$LOKI_URL/loki/api/v1/query_range" || true)"
-  if [ "$loki_code" != "200" ] \
-      || ! jq -e '.data.result | length >= 1' "$loki_body" >/dev/null 2>&1; then
-    log_fail "C6 loki: no 'Killing' log line in last 2 min (HTTP $loki_code)"
-    log_warn "  Promtail may not be scraping the frontend pod; check Promtail ds in $MONITORING_NS"
-    rm -f "$loki_body"
+  if [ "$loki_code" = "200" ]; then
+    loki_pods="$(jq -r '[.data.result[].stream.pod] | unique | length' "$loki_body" 2>/dev/null || echo 0)"
+  fi
+  rm -f "$loki_body"
+  if [ "$loki_pods" -lt 2 ]; then
+    log_fail "C6 loki: expected logs from >= 2 frontend pods in last 15 min (killed + replacement), got $loki_pods (HTTP $loki_code)"
+    log_warn "  fix: check the alloy pod in $MONITORING_NS (kubectl logs -n $MONITORING_NS deploy/alloy)"
     FAIL_COUNT=$((FAIL_COUNT + 1))
     return
   fi
-  rm -f "$loki_body"
-  log_ok "C6 loki: 'Killing' line present in last 2 min"
+  log_ok "C6 loki: logs from $loki_pods frontend pods (killed + replacement)"
 
-  # --- jaeger frontend trace in the last 5 min (best-effort: OTel may not be wired) ---
+  # --- jaeger: frontend traces, generated by real requests ---
+  # loadgenerator is scaled to 0 in the slim profile, so drive a few
+  # requests through the frontend Service ourselves.
+  local pf_port="${SMOKE_FRONTEND_PORT:-18080}"
+  kubectl --kubeconfig "$KUBECONFIG_PATH" --context "$CONTEXT_NAME" \
+    port-forward svc/frontend "$pf_port:80" >/dev/null 2>&1 &
+  local pf_pid=$!
+  sleep 3
+  local i
+  for i in 1 2 3 4 5; do
+    curl -sS -o /dev/null --max-time 10 "http://localhost:$pf_port/" || true
+  done
+  kill "$pf_pid" 2>/dev/null || true
+  wait "$pf_pid" 2>/dev/null || true
+  sleep 5
+
   local jaeger_body="/tmp/inframind-smoke-jaeger-trace.$$"
   local jcode=""
   jcode="$(curl -sS -o "$jaeger_body" -w '%{http_code}' --max-time 15 \
     "$JAEGER_URL/api/traces?service=frontend&lookback=5m&limit=1" || true)"
-  if [ "$jcode" != "200" ]; then
-    log_warn "C6 jaeger: HTTP $jcode from /api/traces — OTel sidecar may not be wired (best-effort)"
+  if [ "$jcode" != "200" ] || ! jq -e '.data | length > 0' "$jaeger_body" >/dev/null 2>&1; then
     rm -f "$jaeger_body"
-  elif ! jq -e '.data | length > 0' "$jaeger_body" >/dev/null 2>&1; then
-    log_warn "C6 jaeger: 200 but no frontend traces in last 5 min (best-effort — OTel not wired?)"
-    rm -f "$jaeger_body"
-  else
-    rm -f "$jaeger_body"
-    log_ok "C6 jaeger: frontend traces present in last 5 min"
+    log_fail "C6 jaeger: no frontend traces in last 5 min (HTTP $jcode)"
+    log_warn "  fix: make boutique   (applies patches/tracing.yaml), then re-run"
+    FAIL_COUNT=$((FAIL_COUNT + 1))
+    return
   fi
+  rm -f "$jaeger_body"
+  log_ok "C6 jaeger: frontend traces present in last 5 min"
 }
 
 # --- run all 6 checks ---

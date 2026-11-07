@@ -1,0 +1,29 @@
+# Dev split scenario 08 — PodChaos pod-kill on recommendationservice.
+# recommendationservice sits under cartservice's product-view call, so this is the
+# fan-out case: one root, several symptom paths.
+scenario_id: dev-podchaos-08-recommendationservice-pod-kill
+set: dev
+seed: 1008
+fault_type: pod_kill
+target_service: recommendationservice
+target_namespace: boutique
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: recommendationservice
+expected_affected_services:
+  - recommendationservice
+  - cartservice
+  - front-end
+chaos:
+  kind: PodChaos
+  spec:
+    action: pod-kill
+    mode: one
+    selector:
+      label: app
+      value: recommendationservice
+metrics_to_assert:
+  - http_requests_total
+repeats: 5
+status: runnable

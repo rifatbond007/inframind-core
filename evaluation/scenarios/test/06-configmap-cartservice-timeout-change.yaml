@@ -1,0 +1,23 @@
+# Test split scenario 06 — a real ConfigMap edit on cartservice, no chaos at all.
+# Runnable: this is the only test scenario that exercises change-correlation (standard 14)
+# end to end, since D22 change events are append-only ConfigMap/Deployment edits.
+scenario_id: test-configmap-06-cartservice-timeout-change
+set: test
+seed: 2006
+fault_type: config_change
+target_service: cartservice
+target_namespace: boutique
+duration_s: 300
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: cartservice
+expected_affected_services:
+  - cartservice
+  - front-end
+  - checkout
+# No `chaos` block: the fault is a ConfigMap edit applied by the runner before the window.
+metrics_to_assert:
+  - http_request_duration_seconds_bucket
+  - http_requests_total
+repeats: 5
+status: runnable

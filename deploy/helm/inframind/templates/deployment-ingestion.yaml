@@ -1,0 +1,68 @@
+{{- /* One Deployment, three collector containers sharing a Pod.
+
+       The three pull collectors (prometheus, loki, jaeger) poll the same observability-stack
+       pods, so they share a failure domain and a Pod gives them that for free: one emptyDir,
+       one ServiceAccount token, one scheduling decision. Keeping them in one Pod also means a
+       ServiceMonitor has a single scrape target family to reason about. This is standard 11
+       section 11.2's "one Deployment per stage" applied one stage further, to the three
+       collectors that make up the single ingestion stage. */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "inframind.fullname" . }}-ingestion
+  labels:
+    {{- include "inframind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: ingestion
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      {{- include "inframind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: ingestion
+  template:
+    metadata:
+      labels:
+        {{- include "inframind.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: ingestion
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "inframind.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        {{- range $collector := list "prometheus" "loki" "jaeger" }}
+        - name: {{ $collector }}
+          image: {{ include "inframind.image" $ }}
+          imagePullPolicy: {{ $.Values.image.pullPolicy }}
+          command: ["python", "-m", "inframind.ingestion.{{ $collector }}"]
+          ports:
+            - name: metrics
+              containerPort: {{ $.Values.metrics.workerPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "inframind.fullname" $ }}-config
+            - secretRef:
+                name: {{ include "inframind.secretName" $ }}
+          resources:
+            {{- toYaml $.Values.resources | nindent 12 }}
+          securityContext:
+            {{- toYaml $.Values.securityContext | nindent 12 }}
+        {{- end }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

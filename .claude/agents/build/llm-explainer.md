@@ -1,7 +1,7 @@
 ---
 name: llm-explainer
 description: "Owns the LLM explainer (prompts, validator, evidence grounding, redaction, and the local Ollama fallback). Lives under src/inframind/llm/."
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

@@ -1,1 +1,0 @@
-[{"op":"add","path":"/spec/template/spec/containers/0/securityContext","value":{"ulimits":[{"name":"nofile","soft":65536,"hard":65536}]}}]

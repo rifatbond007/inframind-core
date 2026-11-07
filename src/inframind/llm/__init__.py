@@ -1,11 +1,21 @@
-"""LLM explanation: turn evidence into a human-readable summary.
+"""Public surface of the LLM explainer (standard 07).
 
-Planned (Step 7):
-
-* Versioned prompts in ``prompts/`` directory.
-* Structured JSON output — every claim references an evidence ID.
-* Validator that checks each cited evidence ID actually exists in the bundle.
-* Async execution, response cache.
-* Secret/PII redaction before sending (D9).
-* Local LLM fallback via Ollama (D9).
+Importers should reach for `LLMParams`, `load_llm_params`, the `LLMSummary` model, and the
+high-level `explain()` entry point. Provider adapters and the redaction layer are
+implementation details; tests reach them directly, but no other module should.
 """
+
+from __future__ import annotations
+
+from .config import LLMParams, load_llm_params, should_fallback_to_ollama
+from .pipeline import explain
+from .types import LLMClaim, LLMSummary
+
+__all__ = [
+    "LLMClaim",
+    "LLMParams",
+    "LLMSummary",
+    "explain",
+    "load_llm_params",
+    "should_fallback_to_ollama",
+]

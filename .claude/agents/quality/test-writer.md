@@ -1,7 +1,7 @@
 ---
 name: test-writer
 description: Owns unit, integration, and end-to-end tests. Ensures every functional change ships with reproducible tests.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
 

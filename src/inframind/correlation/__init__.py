@@ -1,9 +1,6 @@
-"""Correlation: group anomalies into incidents.
+"""Correlation: group anomalies into incidents and drive the baseline freeze.
 
-Planned (Step 5):
-
-* Sliding-window grouping by service + time.
-* Fingerprint-based deduplication.
-* Incident state machine: ``open -> updating -> resolved``.
-* Reconciliation between 5-minute windows and 60s detection cycles.
+P4 ships a minimal per-service ``IncidentTracker`` and the ``CorrelationWorker`` that runs the
+"Detection + Correlation" stage. Windows, fingerprint deduplication and the full state machine
+are P4b.
 """

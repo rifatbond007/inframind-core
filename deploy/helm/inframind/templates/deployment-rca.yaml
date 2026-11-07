@@ -1,0 +1,72 @@
+{{- /* The RCA worker holds the in-memory `ServiceGraph` (D21). The chart pins `replicas: 1`
+       for that reason — a second replica would duplicate work and split the stream. The
+       /app/data emptyDir is the cold-start mechanism: the Jaeger collector writes the JSON
+       snapshot within seconds of starting; a missing file is a cold graph, never a crash. */}}
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "inframind.fullname" . }}-rca
+  labels:
+    {{- include "inframind.labels" . | nindent 4 }}
+    app.kubernetes.io/component: rca
+spec:
+  replicas: {{ .Values.rca.replicaCount }}
+  selector:
+    matchLabels:
+      {{- include "inframind.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/component: rca
+  template:
+    metadata:
+      labels:
+        {{- include "inframind.selectorLabels" . | nindent 8 }}
+        app.kubernetes.io/component: rca
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/configmap.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ include "inframind.serviceAccountName" . }}
+      {{- with .Values.imagePullSecrets }}
+      imagePullSecrets:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      securityContext:
+        {{- toYaml .Values.podSecurityContext | nindent 8 }}
+      containers:
+        - name: rca
+          image: {{ include "inframind.image" . }}
+          imagePullPolicy: {{ .Values.image.pullPolicy }}
+          command: ["python", "-m", "inframind.rca.worker"]
+          ports:
+            - name: metrics
+              containerPort: {{ .Values.metrics.workerPort }}
+              protocol: TCP
+          envFrom:
+            - configMapRef:
+                name: {{ include "inframind.fullname" . }}-config
+            - secretRef:
+                name: {{ include "inframind.secretName" . }}
+          resources:
+            {{- toYaml .Values.resourcesRca | nindent 12 }}
+          securityContext:
+            {{- toYaml .Values.securityContext | nindent 12 }}
+          volumeMounts:
+            - name: graph-data
+              mountPath: /app/data
+              # /app/data is the cold-start directory (RCA_GRAPH_PATH). The Jaeger collector
+              # fills it; the RCA worker reads it on startup and re-saves on every update.
+      volumes:
+        - name: graph-data
+          emptyDir:
+            medium: {{ .Values.rca.graphData.medium }}
+            sizeLimit: {{ .Values.rca.graphData.sizeLimit }}
+      {{- with .Values.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.affinity }}
+      affinity:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}

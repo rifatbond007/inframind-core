@@ -1,7 +1,7 @@
 ---
 name: paper-writer
 description: Drafts the research paper. IEEE conference format, 6–8 pages, LaTeX. Abstract, Intro, Related Work, System Design, Experimental Setup, Results, Discussion, Conclusion.
-model: opus 4.8
+model: claude-opus-4-8
 tools: Read, Glob, Grep, Write, Edit
 ---
 

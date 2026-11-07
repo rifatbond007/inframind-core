@@ -49,8 +49,7 @@ spec:
   stressors:
     memory:
       workers: 1
-      size: "200Mi"
-      time: "5m"
+      size: "200MiB"
       # Bias kernel OOM-killer toward the stress-allocator process
       # (see the comment header).
       oomScoreAdj: 1000

@@ -188,6 +188,7 @@ let a `git commit` land on `main` even by accident. The team's flow is:
 ## 8.10 Cross-reference
 
 - **Skill:** `.claude/skills/commit-protocol/SKILL.md`.
+- **PR skill:** `.claude/skills/pr-protocol/SKILL.md` — open, review, squash-merge, resync (sections 8.7 and 8.8 as a checklist).
 - **Pre-commit config:** `.pre-commit-config.yaml` at the repo root.
 - **CI:** `.github/workflows/ci.yml` — runs the same checks as the local pre-flight.
 - **CODEOWNERS:** `.github/CODEOWNERS` — auto-requested reviewers per directory.

@@ -12,6 +12,7 @@ COMPOSE ?= docker compose
 # Each `make <tool>-check` target verifies the pinned version is on PATH.
 # The pinned versions are the known-good set for the chart versions in
 # `testbed/helm-values/`. Do not bump without re-running `make smoke-testbed`.
+CHAOS_CR            ?= testbed/chaos/network-delay.yaml
 KIND_VERSION         ?= v0.24.0
 KUBECTL_VERSION      ?= v1.30.0
 HELM_VERSION         ?= v3.15.4
@@ -35,6 +36,7 @@ TESTBED_KUBECONFIG    ?= $(CURDIR)/testbed/.kube/config
 KPS_CHART_VERSION    ?= 55.7.0
 LOKI_CHART_VERSION   ?= 6.21.0
 JAEGER_CHART_VERSION ?= 3.3.0
+ALLOY_CHART_VERSION  ?= 1.13.1
 CHAOS_MESH_CHART_VERSION ?= 2.7.2
 TESTBED_NS           ?= monitoring
 # Online Boutique is vendored from github.com/GoogleCloudPlatform/microservices-demo
@@ -95,12 +97,12 @@ up: kind obs boutique chaos ## bring up Compose + the full testbed chain
 .PHONY: down
 down: ## stop Compose + delete the kind cluster (full reset, incl. volumes)
 	$(COMPOSE) down -v
+	@# No `#` comments inside the backslash-continued block below: make joins
+	@# the lines into one, so the first `#` would comment out the rest and the
+	@# shell would fail with "expecting fi". Check both the testbed kubeconfig
+	@# file and the host's kind cluster list; pass --kubeconfig so the check
+	@# does not read a stale $$KUBECONFIG from a prior session.
 	@if command -v kind >/dev/null 2>&1; then \
-		# Check both the testbed kubeconfig file and the host's kind
-		# cluster list (kind reads its own state from $$HOME/.kube/kind/*,
-		# not from the testbed kubeconfig). Pass --kubeconfig to the
-		# `kind get clusters` check so it doesn't read from $$KUBECONFIG
-		# (which may be set to a removed cluster from a prior session).
 		if [ -f "$(TESTBED_KUBECONFIG)" ] \
 		    || kind get clusters --kubeconfig $(TESTBED_KUBECONFIG) 2>/dev/null | grep -q "^$(TESTBED_CLUSTER_NAME)$$"; then \
 			echo "Deleting kind cluster '$(TESTBED_CLUSTER_NAME)' (context: $(TESTBED_CONTEXT))..."; \
@@ -182,10 +184,11 @@ kind-delete: ## delete the inframind cluster (used by make down and for clean re
 	@kind delete cluster --name $(TESTBED_CLUSTER_NAME) --kubeconfig $(TESTBED_KUBECONFIG)
 
 .PHONY: obs
-obs: kind helm-check ## install observability stack (kube-prometheus-stack + Loki + Jaeger) into the kind cluster
+obs: kind helm-check ## install observability stack (kube-prometheus-stack + Loki + Jaeger + Alloy) into the kind cluster
 	@KPS_CHART_VERSION=$(KPS_CHART_VERSION) \
 	 LOKI_CHART_VERSION=$(LOKI_CHART_VERSION) \
 	 JAEGER_CHART_VERSION=$(JAEGER_CHART_VERSION) \
+	 ALLOY_CHART_VERSION=$(ALLOY_CHART_VERSION) \
 	 TESTBED_CLUSTER_NAME=$(TESTBED_CLUSTER_NAME) \
 	 TESTBED_CONTEXT=$(TESTBED_CONTEXT) \
 	 TESTBED_KUBECONFIG=$(TESTBED_KUBECONFIG) \
@@ -245,6 +248,22 @@ chaos-delete: ## delete the 5 chaos CRs (but keep chaos-mesh installed)
 	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
 		delete podchaos,networkchaos,stresschaos --all -n $(CHAOS_TESTING_NS) --ignore-not-found
 
+.PHONY: observe-fault
+observe-fault: ## watch the ingestion paths during one chaos fault: make observe-fault [CHAOS_CR=testbed/chaos/<file>.yaml]
+	PY=$(PY) bash testbed/observe_fault.sh $(CHAOS_CR)
+
+.PHONY: smoke-detection
+smoke-detection: ## verify the P4 gate live: a burst becomes one incident, baselines freeze, it resolves (~7 min, needs `make up`)
+	$(PY) testbed/smoke_detection.py
+
+.PHONY: smoke-rca
+smoke-rca: ## verify the P5 RCA unit tests: graph + walk + PageRank + worker (no Redis, fast)
+	$(PYTEST) tests/unit/rca/ -q
+
+.PHONY: smoke-ingestion
+smoke-ingestion: ## verify the P3 gate live: API + 3 collectors + a real alert (needs `make up`, port 8080 free)
+	$(PY) testbed/smoke_ingestion.py
+
 .PHONY: smoke-testbed
 smoke-testbed: ## verify the P1 → P2 gate (6 checks; see testbed/README.md §4)
 	@TESTBED_CONTEXT=$(TESTBED_CONTEXT) \
@@ -262,15 +281,97 @@ smoke-testbed: ## verify the P1 → P2 gate (6 checks; see testbed/README.md §4
 # testbed-full: down kind obs boutique chaos ## 32 GB profile: full replicas + retention
 # 	@echo "Full testbed profile up. See testbed/README.md §7."
 
-# --- evaluation / paper (placeholders for later) ---
-.PHONY: eval
-eval: ## run a single evaluation scenario (not implemented yet — Phase P7)
-	@echo "eval target not implemented yet. See docs/PROGRESS.md (Phase P7)."
+# --- evaluation / paper (P7) ---
+# `make eval`, `eval-all`, `eval-soak`, and `eval-ablation` all run on **replay**
+# by default (see docs/standards/10-evaluation.md §10.8). The replay path
+# needs no docker daemon and runs green on this box; `--live` reaches for
+# kubectl via `runner/live.py` and is intentionally not set by any target.
+#
+# All targets default to the dev set. `eval-all` consumes the test set once
+# and the result is the paper's source of truth (D6). Soak measures false-positive
+# rate on a fault-free window — also on the dev set.
+#
+# Override knobs (all via `INFRAMIND_EVAL_*` env keys, see standards 10 §10.7):
+#   make eval REPEATS=3 ALLOW_BLOCKED=1     # make-var shortcuts
+#   INFRAMIND_EVAL_ALLOW_OVERWRITE=1 make eval-all
+.PHONY: eval eval-all eval-soak eval-ablation eval-live paper
+eval: ## replay the dev set through InfraMind + 6 baselines (default repeats=5, INFRAMIND_EVAL_* honoured)
+	$(PY) -m inframind.evaluation.runner.main --set dev
 
-.PHONY: eval-all
-eval-all: ## run the full evaluation matrix (not implemented yet — Phase P7)
-	@echo "eval-all target not implemented yet. See docs/PROGRESS.md (Phase P7)."
+eval-all: ## replay dev + test. The scored-once run (D6 source of truth).
+	$(PY) -m inframind.evaluation.runner.main --set all
+
+eval-soak: ## replay a fault-free window on the dev set to measure the false-positive rate (D6).
+	$(PY) -m inframind.evaluation.runner.main --set dev --soak
+
+eval-ablation: ## the four locked ablations on the dev set (asserts the D1 no-llm invariant).
+	$(PY) -m inframind.evaluation.runner.main --set dev --ablation
+
+eval-live: ## typed-by-a-human live path against kind-inframind. Refuses other contexts. No Make target sets this.
+	$(PY) -m inframind.evaluation.runner.main --set dev --live
 
 .PHONY: paper
 paper: ## build the paper artifact (not implemented yet — Phase P9)
 	@echo "paper target not implemented yet. See docs/PROGRESS.md (Phase P9)."
+
+# --- P8: packaging + deployment (standard 11) ---
+#
+# Two deployment paths, deliberately separate:
+#
+#   make image        build inframind:dev from the root Dockerfile
+#   make helm-install install the chart into kind-inframind
+#   make up-app       the whole chain: image -> load into kind -> install the chart
+#
+# `make up` (the testbed chain) is UNCHANGED. It brings up Online Boutique + the observability
+# stack + Chaos Mesh; `make up-app` layers InfraMind on top of an already-running testbed.
+# Nothing here touches `~/.kube/config` — every kubectl and helm invocation is pinned to the
+# testbed kubeconfig and the kind- context (PUKU.md hard rule).
+CHART_DIR ?= deploy/helm/inframind
+APP_NAMESPACE ?= inframind
+APP_TAG ?= 0.0.0
+
+.PHONY: image
+image: ## build the local InfraMind image (inframind:dev) from the root Dockerfile
+	docker build -t inframind:dev .
+
+.PHONY: hadolint
+hadolint: ## lint the Dockerfile (blocking at warning severity, matching CI)
+	docker run --rm -i hadolint/hadolint:v2.12.0 --failure-threshold warning < Dockerfile
+
+.PHONY: chart-lint
+chart-lint: helm-check ## helm lint + template render + the four-Deployment / no-secret guards
+	bash $(CHART_DIR)/tests/helm-lint.sh
+	helm template inframind $(CHART_DIR) > /tmp/inframind-rendered.yaml
+	@echo "chart-lint: rendered to /tmp/inframind-rendered.yaml"
+
+.PHONY: chart-package
+chart-package: helm-check ## package the chart into dist/
+	mkdir -p dist
+	helm package $(CHART_DIR) -d dist/
+
+.PHONY: image-load
+image-load: kind-check ## load inframind:dev into kind-inframind (no registry needed)
+	kind load docker-image inframind:dev --name $(TESTBED_CLUSTER_NAME)
+
+.PHONY: helm-install
+helm-install: helm-check ## install (or upgrade) the chart into kind-inframind
+	helm upgrade --install inframind $(CHART_DIR) \
+	  --kubeconfig $(TESTBED_KUBECONFIG) \
+	  --namespace $(APP_NAMESPACE) \
+	  --create-namespace \
+	  --set image.tag=$(APP_TAG) \
+	  --wait --timeout 5m
+
+.PHONY: helm-uninstall
+helm-uninstall: helm-check ## remove the chart from kind-inframind
+	helm uninstall inframind \
+	  --kubeconfig $(TESTBED_KUBECONFIG) \
+	  --namespace $(APP_NAMESPACE) || true
+
+.PHONY: up-app
+up-app: image image-load helm-install ## build the image, load it into kind, and install the chart
+
+.PHONY: app-status
+app-status: ## show the InfraMind pods and Deployments in the kind cluster
+	kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+	  -n $(APP_NAMESPACE) get deploy,pods,svc -o wide

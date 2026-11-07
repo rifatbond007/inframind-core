@@ -1,0 +1,29 @@
+# Dev split scenario 01 — PodChaos pod-kill on cartservice.
+# Runnable: PodChaos injects through the CRI, so the docker-runtime limitation does not apply.
+scenario_id: dev-podchaos-01-cartservice-pod-kill
+set: dev
+seed: 1001
+fault_type: pod_kill
+target_service: cartservice
+target_namespace: boutique
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: cartservice
+expected_affected_services:
+  - cartservice
+  - front-end
+  - checkout
+chaos:
+  kind: PodChaos
+  spec:
+    action: pod-kill
+    mode: one
+    selector:
+      label: app
+      value: cartservice
+metrics_to_assert:
+  - http_requests_total
+  - http_request_duration_seconds_bucket
+repeats: 5
+status: runnable
