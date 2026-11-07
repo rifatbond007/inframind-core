@@ -53,9 +53,10 @@ prometheus:
 # --- Alertmanager ---
 alertmanager:
   enabled: true
-  # P3: forward every alert to the InfraMind API running on the dev host. 172.22.0.1 is the
-  # gateway of the `kind` docker network (`docker network inspect kind`); kind pods cannot reach
-  # the host as `localhost`. The bearer token is a dev-only placeholder that must match the
+  # P3: forward every alert to the InfraMind API running on the dev host. KIND_HOST_GATEWAY is a
+  # placeholder that `testbed/obs/install.sh` replaces with the gateway of the `kind` docker
+  # network (`docker network inspect kind`); kind pods cannot reach the host as `localhost`, and
+  # the gateway differs between Docker Engine and Docker Desktop, so it is never hard-coded. The bearer token is a dev-only placeholder that must match the
   # API's INFRAMIND_ALERT_WEBHOOK_SECRET; real deployments take it from a Secret (P8).
   # Setting `config` replaces the chart default, so the default inhibit rules are repeated here.
   config:
@@ -81,7 +82,7 @@ alertmanager:
       - name: "null"
       - name: inframind
         webhook_configs:
-          - url: http://172.22.0.1:8080/webhooks/alertmanager
+          - url: http://KIND_HOST_GATEWAY:8080/webhooks/alertmanager
             send_resolved: true
             http_config:
               authorization:
