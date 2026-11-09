@@ -27,16 +27,22 @@ from .config import (
 )
 from .db import StorageUnavailable, close_pool, create_pool, init_schema
 from .incidents import (
+    PIPELINE_ACTOR,
+    AlertRecord,
     IncidentDetail,
     IncidentListItem,
     get_incident,
     list_incidents,
+    record_alerts,
+    record_summary,
     transition_incident,
     write_incident,
 )
 
 __all__ = [
     "DEFAULT_POSTGRES_URL",
+    "PIPELINE_ACTOR",
+    "AlertRecord",
     "IncidentDetail",
     "IncidentListItem",
     "StorageParams",
@@ -50,7 +56,9 @@ __all__ = [
     "list_incidents",
     "load_storage_params",
     "postgres_url",
+    "record_alerts",
     "record_audit",
+    "record_summary",
     "transition_incident",
     "write_incident",
 ]

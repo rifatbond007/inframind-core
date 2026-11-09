@@ -25,8 +25,8 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Awaitable, Sequence
-from dataclasses import dataclass
-from typing import Literal
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 from inframind.common.incident import Incident
 from inframind.common.logging import get_logger
@@ -51,6 +51,9 @@ class DispatchResult:
     incident_id: str
     alerted: bool  # False when dedup suppressed it
     outcomes: list[tuple[str, ChannelName, SinkStatus]]
+    # The payload that went to the sinks (empty when dedup suppressed the alert); the
+    # caller stores it in the `alerts` table, which alerting may not import (DAG).
+    payload: dict[str, Any] = field(default_factory=dict)
 
     @property
     def delivered_any(self) -> bool:
@@ -63,6 +66,19 @@ class AlertRouter:
     def __init__(self, params: AlertingParams | None = None) -> None:
         self._params = params or AlertingParams()
         self._dedup = DedupTracker(window_s=self._params.dedup_window_s)
+
+    def should_dispatch(self, incident: Incident) -> bool:
+        """True iff `dispatch` would alert for `incident` now. Has no side effects.
+
+        Lets the caller skip work that only matters when an alert fires, such as the LLM
+        summary, so the explainer runs at most once per alert rather than once per
+        incident revision.
+        """
+        return self._dedup.should_alert(incident.id, incident.severity)
+
+    def forget(self, incident_id: str) -> None:
+        """Drop the dedup state of an incident that has closed."""
+        self._dedup.forget(incident_id)
 
     async def dispatch(
         self,
@@ -111,7 +127,9 @@ class AlertRouter:
             sinks=[channel for _, channel, _ in outcomes],
             statuses=[status for _, _, status in outcomes],
         )
-        return DispatchResult(incident_id=incident.id, alerted=True, outcomes=outcomes)
+        return DispatchResult(
+            incident_id=incident.id, alerted=True, outcomes=outcomes, payload=payload
+        )
 
 
 __all__ = ["AlertRouter", "DispatchResult"]

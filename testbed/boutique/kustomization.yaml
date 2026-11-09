@@ -61,6 +61,15 @@ patchesStrategicMerge:
 - patches/memory-patches.yaml
 - patches/loadgenerator-scale.yaml
 - patches/tracing.yaml
+- patches/frontend-templates.yaml
+
+# Template overrides for the frontend (see patches/frontend-templates.yaml).
+# The generated name carries a content hash, so editing the template rolls
+# the frontend Deployment on the next `make boutique`.
+configMapGenerator:
+- name: frontend-templates
+  files:
+  - footer.html=patches/frontend-templates/footer.html
 
 # Common label so we can find the whole stack with one selector
 # (`kubectl get all -n default -l app.kubernetes.io/part-of=boutique`).

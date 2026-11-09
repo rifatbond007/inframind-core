@@ -18,6 +18,23 @@ boundary).
 
 from __future__ import annotations
 
-from .app import create_app
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .app import create_app
 
 __all__ = ["create_app"]
+
+
+def __getattr__(name: str) -> Any:
+    """Load `create_app` lazily.
+
+    An eager `from .app import create_app` here makes `python -m inframind.api.app` (the
+    container entrypoint) import `inframind.api.app` twice, which runpy reports as a
+    RuntimeWarning and which would run its module-level code twice.
+    """
+    if name == "create_app":
+        from .app import create_app
+
+        return create_app
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

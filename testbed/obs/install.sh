@@ -135,6 +135,25 @@ helm upgrade --install "$KPS_CRDS_RELEASE" "$KPS_CHART_DIR/charts/crds" \
   --wait --timeout "$WAIT_TIMEOUT"
 log_ok "kube-prometheus-stack CRDs ready"
 
+# --- resolve the host address kind pods use to reach the InfraMind API ---
+# Alertmanager posts to the API on the dev host through the gateway of the `kind`
+# docker network. That gateway differs between Docker Engine and Docker Desktop
+# (and between hosts), so it is looked up here and substituted for the
+# KIND_HOST_GATEWAY placeholder in the values file, instead of being hard-coded.
+KIND_HOST_GATEWAY="${KIND_HOST_GATEWAY:-$(docker network inspect kind \
+  --format '{{range .IPAM.Config}}{{.Gateway}} {{end}}' 2>/dev/null \
+  | tr ' ' '\n' | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' | head -n1 || true)}"
+if [[ -z "$KIND_HOST_GATEWAY" ]]; then
+  log_fail "could not read the IPv4 gateway of the 'kind' docker network"
+  log_warn "  check: docker network inspect kind   (or set KIND_HOST_GATEWAY=<ip>)"
+  exit 1
+fi
+log_ok "kind host gateway: $KIND_HOST_GATEWAY (Alertmanager -> InfraMind API)"
+KPS_VALUES_RENDERED="$(mktemp)"
+trap 'rm -f "$KPS_VALUES_RENDERED"' EXIT
+sed "s/KIND_HOST_GATEWAY/$KIND_HOST_GATEWAY/g" \
+  "$VALUES_DIR/kube-prometheus-stack.yaml" >"$KPS_VALUES_RENDERED"
+
 # --- install: kube-prometheus-stack ---
 log_info "installing kube-prometheus-stack chart $KPS_CHART_VERSION"
 helm upgrade --install "$KPS_RELEASE" \
@@ -143,7 +162,7 @@ helm upgrade --install "$KPS_RELEASE" \
   --kubeconfig "$KUBECONFIG_PATH" \
   --namespace "$MONITORING_NAMESPACE" \
   --version "$KPS_CHART_VERSION" \
-  --values "$VALUES_DIR/kube-prometheus-stack.yaml" \
+  --values "$KPS_VALUES_RENDERED" \
   --wait --timeout "$WAIT_TIMEOUT"
 log_ok "kube-prometheus-stack ready"
 
@@ -185,6 +204,19 @@ helm upgrade --install "$ALLOY_RELEASE" \
   --values "$VALUES_DIR/alloy.yaml" \
   --wait --timeout "$WAIT_TIMEOUT"
 log_ok "alloy ready"
+
+# --- Grafana dashboards shipped with the testbed ---
+# Every JSON file in testbed/obs/dashboards/ becomes one key of a ConfigMap
+# labelled `grafana_dashboard`, which the kube-prometheus-stack Grafana
+# sidecar watches in all namespaces and loads within a few seconds.
+DASHBOARDS_DIR="$REPO_ROOT/testbed/obs/dashboards"
+log_info "loading Grafana dashboards from $DASHBOARDS_DIR"
+kubectl --context "$CONTEXT_NAME" --kubeconfig "$KUBECONFIG_PATH" \
+  -n "$MONITORING_NAMESPACE" create configmap inframind-dashboards \
+  --from-file="$DASHBOARDS_DIR" --dry-run=client -o yaml \
+  | kubectl label --local -f - grafana_dashboard=1 -o yaml \
+  | kubectl --context "$CONTEXT_NAME" --kubeconfig "$KUBECONFIG_PATH" apply -f - >/dev/null
+log_ok "dashboards loaded (InfraMind / Signals: http://localhost:30300/d/inframind-signals)"
 
 # --- summary ---
 log_ok "observability stack is up"

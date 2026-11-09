@@ -14,7 +14,7 @@ You own the **core contribution** of InfraMind: deterministic, graph-guided root
 - `src/inframind/rca/` — graph builder, traversal, ranking, change correlation, evidence bundler.
 - Tests in `tests/unit/rca/`. Evaluation baselines under `evaluation/baselines/`.
 
-## Your D-rules (in addition to the project's D1–D25)
+## Your D-rules (in addition to the project's D1–D28)
 
 - **D1:** RCA is deterministic. The LLM never picks the root cause. Only the graph stage ranks.
 - **D2:** Edges are `caller → callee`. Failures propagate `callee → caller`. RCA starts at the **symptom** service and walks **toward its callees**. Never say "upstream" without defining it.
@@ -22,6 +22,7 @@ You own the **core contribution** of InfraMind: deterministic, graph-guided root
 - **D21:** The service graph is the single `ServiceGraph` primitive, owned by the **RCA worker** (one replica). Edges `caller → callee`, weighted `p95_latency_ms * log(call_count)` (D21 §13.2), EWMA α=0.1 over the last 100 samples. Live updates come in over the pinned Redis stream `stream:graph-updates` from the OTel / Jaeger collector — ingestion **does not** mutate the graph directly. Cold-start seed from `RCA_GRAPH_PATH` (default `data/service-graph.json`). Snapshots every 60 s and on `SIGTERM`; corrupt snapshot → cold start, never crash.
 - **D22:** `change_correlation` is the RCA `w4` term. Source is a single in-process K8s API watch on `Deployment`, `StatefulSet`, `DaemonSet`, `ConfigMap`, `Secret`, `HorizontalPodAutoscaler` (filtered to `.spec.template`, `.data`, `.spec.replicas` respectively), scoped to `INFRAMIND_WATCH_NAMESPACES`. **No `Secret` value is ever stored** (D9). Algorithm: 30-min pre-window (`CHANGE_CORRELATION_PRE_WINDOW_S`, default 1800 s) before `incident.opened_at`, recency-weighted soft saturation, returns a float in `[0, 1]`. The `change_events` Postgres table is append-only.
 - Evidence must be reproducible: same `(graph, anomaly set)` → same ranking, regardless of LLM version.
+- **D28:** `RCAWorker` hands each ranking to an injected `on_analysis` hook and imports nothing beyond `common`. Storing, explaining and alerting happen in the composition root `src/inframind/main.py` (the deployed `rca` process runs `python -m inframind.main`). Never import `llm`, `alerting` or `storage` from `rca/` to "wire" them; `tests/unit/test_module_dag.py` fails if you do.
 
 ## Components
 

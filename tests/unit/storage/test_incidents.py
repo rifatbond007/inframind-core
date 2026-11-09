@@ -167,8 +167,8 @@ async def test_write_incident_serialises_jsonb_columns(pool: FakePool) -> None:
     assert json.loads(services) == ["frontend"]
     assert json.loads(signals) == ["sig_1"]
     assert json.loads(anomalies) == []
-    # None columns are encoded as empty string, mapped to SQL NULL by NULLIF.
-    assert summary == ""
+    # None columns reach asyncpg as None, i.e. SQL NULL ('' would be rejected by ::jsonb).
+    assert summary is None
     assert json.loads(alerts) == []
 
 
@@ -219,9 +219,11 @@ async def test_transition_incident_updates_state_and_writes_audit(pool: FakePool
     )
     assert ok is True
     assert pool.transaction_entries == 1
-    sqls = pool.sql_of("execute")
+    sqls = [" ".join(sql.split()) for sql in pool.sql_of("execute")]
     assert any("UPDATE incidents SET state" in sql for sql in sqls)
     assert any("INSERT INTO audit_log" in sql for sql in sqls)
+    # `Incident` requires closed_at exactly for resolved/expired, so the UPDATE keeps it in step.
+    assert any("closed_at = CASE" in sql for sql in sqls)
 
 
 async def test_transition_incident_returns_false_when_missing(pool: FakePool) -> None:
@@ -538,8 +540,9 @@ async def test_record_audit_serialises_before_and_after(pool: FakePool) -> None:
 async def test_record_audit_encodes_none_as_sql_null(pool: FakePool) -> None:
     await record_audit(pool, actor="rifatbond007", action="open", target="inc_001")
     before, after = pool.args_of("execute")[0][4:6]
-    assert before == ""
-    assert after == ""  # NULLIF(..., '') -> SQL NULL
+    # None must reach asyncpg as None (SQL NULL): Postgres rejects ''::jsonb.
+    assert before is None
+    assert after is None
 
 
 async def test_record_audit_raises_storage_unavailable(pool: FakePool) -> None:

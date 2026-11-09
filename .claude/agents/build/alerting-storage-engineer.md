@@ -26,6 +26,7 @@ You close the loop: emit deduplicated alerts with full RCA payloads and persist 
 - Sinks: at least one sink works in dev — start with a generic webhook and a console printer. Telegram/Slack/email pluggable later.
 - Audit log: **append-only** (D20). Every state change, every ranking decision, every LLM call is recorded with timestamp + actor.
 - **At-least-once** delivery. If the sink is down, queue the alert and retry (Redis Streams back-pressure).
+- **D28** — the router and the storage writes are driven by the composition root `src/inframind/main.py` in the `rca` process, not by the api: per incident revision `write_incident`; when `AlertRouter.should_dispatch` is true, `record_summary`, `dispatch`, `record_alerts` (audit actor `inframind-pipeline`). `alerting` still may not import `storage`; the router returns `payload` and `outcomes` for the caller to persist. `write_incident` never overwrites `summary_text`/`alerts` and keeps a human ack/resolve over a pipeline `open`.
 - **D20** — the Postgres store is the source of truth; Redis Streams is the conduit. If Postgres is unavailable, the system refuses to acknowledge an incident rather than silently dropping it.
 - **D9** — secret values, raw env, and request bodies never reach the alert payload, the audit log, or the LLM. The redactor (`src/inframind/llm/redact.py`) is the canonical implementation; this agent consumes its output.
 - **D25** — the API's audit-log `actor` field records the GitHub username of the human who triggered the action, not a display name and not an AI tool name.

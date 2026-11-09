@@ -50,6 +50,11 @@ def create_app(
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Response:
+        """204, so a browser opening the JSON API does not log a 404 for the icon."""
+        return Response(status_code=204)
+
     @app.get("/readyz")
     async def readyz() -> Response:
         """200 only when Redis AND Postgres respond; 503 naming the failing dependency."""
@@ -138,7 +143,8 @@ def main() -> None:
             Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0")),
             webhook_secret=os.environ.get("INFRAMIND_ALERT_WEBHOOK_SECRET", ""),
             postgres_pool=pool,
-            alerting_router=AlertRouter(),
+            # No AlertRouter here: alerts are dispatched by the rca process, next to the
+            # ranking they describe (D28, standard 06b.4). This process reads them back.
         )
         config = uvicorn.Config(
             app,

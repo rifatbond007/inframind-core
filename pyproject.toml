@@ -35,6 +35,9 @@ dependencies = [
     "asyncpg>=0.30,<0.33",
     "PyYAML>=6.0,<7.0",
     "prometheus_client>=0.20,<1.0",
+    # LLM explainer (P5b): the OpenAI-compatible chat client, used for OpenAI and for
+    # hosted OpenAI-compatible providers such as Groq via LLM_BASE_URL.
+    "openai>=1.40,<3",
 ]
 
 [project.optional-dependencies]
@@ -101,3 +104,8 @@ package-dir = { "" = "src" }
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["inframind*"]
+
+# Non-Python files the code reads at runtime. Without this the wheel (and so the Docker
+# image) shipped no prompt template and every LLM call fell back to the template summary.
+[tool.setuptools.package-data]
+"inframind.llm" = ["prompts/*.j2"]

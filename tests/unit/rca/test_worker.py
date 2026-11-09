@@ -160,3 +160,41 @@ def test_worker_owns_change_events_passed_in_at_construction(warm_graph: Service
     )
     worker = RCAWorker(MagicMock(), warm_graph, change_events=[change])
     assert worker._change_events == [change]
+
+
+async def test_handle_incident_hands_the_analysis_to_the_hook(warm_graph: ServiceGraph) -> None:
+    """D28: what happens to a ranking is injected; the worker only calls the hook."""
+    seen: list[tuple[Incident, object]] = []
+
+    async def hook(incident: Incident, analysis: object) -> None:
+        seen.append((incident, analysis))
+
+    worker = RCAWorker(MagicMock(), warm_graph, on_analysis=hook)
+    incident = _incident(_fault_anomalies())
+    await worker.handle_incident(incident)
+
+    assert len(seen) == 1
+    assert seen[0][0] is incident
+    # Deterministic ranking: same input, same ranked services (candidate ids are fresh ULIDs).
+    handed = seen[0][1]
+    again = worker.analyse(incident)
+    assert [c.service for c in handed.candidates] == [c.service for c in again.candidates]
+    assert handed.incident_id == incident.id
+
+
+async def test_a_failing_hook_propagates_so_the_bus_redelivers(warm_graph: ServiceGraph) -> None:
+    async def hook(incident: Incident, analysis: object) -> None:
+        raise RuntimeError("postgres down")
+
+    worker = RCAWorker(MagicMock(), warm_graph, on_analysis=hook)
+    try:
+        await worker.handle_incident(_incident(_fault_anomalies()))
+    except RuntimeError as e:
+        assert "postgres down" in str(e)
+    else:
+        raise AssertionError("the hook's error must reach the consumer (entry stays pending)")
+
+
+async def test_without_a_hook_the_worker_only_ranks(warm_graph: ServiceGraph) -> None:
+    worker = RCAWorker(MagicMock(), warm_graph)
+    await worker.handle_incident(_incident(_fault_anomalies()))  # no hook, no error

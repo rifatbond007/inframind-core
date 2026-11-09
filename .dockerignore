@@ -33,7 +33,8 @@ paper/
 .claude/
 .superpowers/
 CHANGELOG.md
-README.md
+# README.md is NOT ignored: pyproject.toml declares `readme = "README.md"`, so the
+# builder stage COPYs it and `pip install .` fails without it.
 PUKU.md
 AGENTS.md
 CLAUDE.local.md

@@ -1,0 +1,32 @@
+# testbed/boutique/patches/frontend-templates.yaml
+#
+# Mount a corrected footer template over the one baked into the upstream
+# frontend image (v0.10.7). Upstream's footer loads bootstrap.min.js
+# (Bootstrap 4 JS) but never loads jQuery, which Bootstrap 4 JS requires,
+# so every page threw "TypeError: Cannot read properties of undefined
+# (reading 'fn')" in the browser. No template uses a Bootstrap JS
+# component, so the override only drops that <script>; the rest of the
+# file is byte-identical upstream (see frontend-templates/footer.html).
+#
+# The ConfigMap is built by `configMapGenerator` in ../kustomization.yaml;
+# its hashed name is substituted here by kustomize. The image's working
+# directory is /src and the server parses /src/templates/*.html at start,
+# so a subPath mount replaces just this one file.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+spec:
+  template:
+    spec:
+      containers:
+        - name: server
+          volumeMounts:
+            - name: frontend-templates
+              mountPath: /src/templates/footer.html
+              subPath: footer.html
+              readOnly: true
+      volumes:
+        - name: frontend-templates
+          configMap:
+            name: frontend-templates

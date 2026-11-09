@@ -112,17 +112,34 @@ services:
     image: inframind:dev
     container_name: inframind-rca
     restart: unless-stopped
-    command: ["python", "-m", "inframind.rca.worker"]
+    # The composition root (D28): the RCA worker plus storage, the LLM explainer and the
+    # alert router. `inframind.rca.worker` alone would rank and store nothing.
+    command: ["python", "-m", "inframind.main"]
     ports:
       - "9101:9100"
-    environment: *common-env
+    environment:
+      <<: *common-env
+      # LLM explainer: an OpenAI-compatible API (Groq by default). Put LLM_API_KEY in the
+      # gitignored .env; compose reads it from there. Without a key every summary is the
+      # deterministic template. The local Ollama fallback is off (no local model here).
+      LLM_PROVIDER: ${LLM_PROVIDER:-openai}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+      LLM_BASE_URL: ${LLM_BASE_URL:-https://api.groq.com/openai/v1}
+      LLM_MODEL: ${LLM_MODEL:-openai/gpt-oss-120b}
+      LLM_TIMEOUT_S: ${LLM_TIMEOUT_S:-20}
+      INFRAMIND_LLM_OLLAMA_FALLBACK: ${INFRAMIND_LLM_OLLAMA_FALLBACK:-false}
+      INFRAMIND_ALERTING_WEBHOOK_URL: ${INFRAMIND_ALERTING_WEBHOOK_URL:-}
     extra_hosts: *common-extra-hosts
-    # D21 cold start: a bind-mounted directory the RCA worker reads service-graph.json from
-    # and writes it back to. A missing file is a cold graph, never a crash.
+    # D21 cold start: the directory the RCA worker reads service-graph.json from and writes it
+    # back to. A missing file is a cold graph, never a crash. A named volume, not a host bind
+    # mount: the image runs as uid 10001 and a host-owned ./data was not writable, so the
+    # snapshot failed with "Permission denied" (the chart uses an emptyDir the same way).
     volumes:
-      - ./data:/app/data
+      - graph-data:/app/data
     depends_on:
       redis:
+        condition: service_healthy
+      postgres:
         condition: service_healthy
 
   ingestion-prometheus:
@@ -166,7 +183,7 @@ services:
     # The Jaeger collector is the one that publishes graph updates, so it and the RCA worker
     # share /app/data — otherwise the RCA worker never sees a cold-start snapshot.
     volumes:
-      - ./data:/app/data
+      - graph-data:/app/data
     depends_on:
       redis:
         condition: service_healthy
@@ -174,3 +191,4 @@ services:
 volumes:
   redis-data:
   postgres-data:
+  graph-data:

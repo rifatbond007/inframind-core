@@ -78,3 +78,40 @@ def test_only_api_imports_fastapi() -> None:
             if any(n == "fastapi" or n.startswith("fastapi.") for n in names):
                 offenders.append(str(path.relative_to(SRC)))
     assert not offenders, offenders
+
+
+#: Root modules (`src/inframind/*.py`) sit outside the package table, so they get their own.
+#: `main` is the composition root (D28): the one place that may join `rca`, `llm`,
+#: `alerting` and `storage` in one process (standard 06b.4). It still may not reach the
+#: other stages' internals, the API, or the evaluation harness.
+ROOT_ALLOWED: dict[str, set[str]] = {
+    "__init__": set(),
+    "metrics": {"common"},
+    "main": {"common", "rca", "llm", "alerting", "storage"},
+}
+
+
+def test_every_root_module_is_covered_by_the_table() -> None:
+    roots = {p.stem for p in SRC.glob("*.py")}
+    assert roots <= set(ROOT_ALLOWED), f"add to ROOT_ALLOWED: {sorted(roots - set(ROOT_ALLOWED))}"
+
+
+@pytest.mark.parametrize("module", sorted(ROOT_ALLOWED))
+def test_root_modules_respect_their_allowance(module: str) -> None:
+    path = SRC / f"{module}.py"
+    siblings = _imports(path, module) & set(ALLOWED)
+    forbidden = siblings - ROOT_ALLOWED[module]
+    assert not forbidden, (
+        f"{module}.py imports {sorted(forbidden)}; allowed: {sorted(ROOT_ALLOWED[module])}"
+    )
+
+
+def test_only_the_composition_root_joins_rca_with_llm_alerting_or_storage() -> None:
+    """No package — and no root module other than `main` — may hold the full post-RCA chain."""
+    post_rca = {"llm", "alerting", "storage"}
+    for package, allowed in ALLOWED.items():
+        if package in ("llm", "alerting", "storage", "api", "evaluation"):
+            continue  # their own edges are pinned by ALLOWED above
+        assert not (allowed & post_rca), f"{package} may not reach {sorted(allowed & post_rca)}"
+    joined = [m for m, allowed in ROOT_ALLOWED.items() if {"rca", "storage"} <= allowed]
+    assert joined == ["main"], joined

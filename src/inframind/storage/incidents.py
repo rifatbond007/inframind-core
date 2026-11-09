@@ -1,9 +1,13 @@
 """Persisted incident records, ranked candidates, and evidence (D20).
 
-All writes go through `write_incident` and `transition_incident` so a single transaction
-covers the `incidents`, `candidates`, and `evidence` rows. A transaction that fails
+All writes go through `write_incident`, `transition_incident`, `record_summary` and
+`record_alerts`, each in one transaction with its audit row. A transaction that fails
 halfway through leaves the database unchanged because asyncpg rolls back on any exception,
 which is exactly the "refuse, not silently drop" behaviour D20 requires.
+
+`write_incident` upserts on every incident revision but never touches `summary_text` or
+`alerts`: those are owned by `record_summary` and `record_alerts`, so a later revision of
+the same incident cannot wipe the explanation or the alert history.
 
 Reads paginate by an opaque cursor — the cursor is the incident id of the last row in
 the previous page. The endpoint contract is `?cursor=<id>&limit=N`; `next_cursor` is
@@ -14,9 +18,9 @@ when there is no more.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
-from dataclasses import dataclass
-from typing import Literal
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field
+from typing import Any, Literal
 
 import asyncpg
 
@@ -33,10 +37,15 @@ IncidentState = Literal["open", "acknowledged", "resolved", "expired"]
 Severity = Literal["info", "warning", "critical"]
 
 
-def _to_jsonb(value: object) -> str:
-    """Serialise `value` for asyncpg JSONB; ``None`` is stored as SQL NULL."""
+def _to_jsonb(value: object) -> str | None:
+    """Serialise `value` for asyncpg JSONB; ``None`` is stored as SQL NULL.
+
+    ``None`` must reach asyncpg as ``None`` (SQL NULL): an empty string cast with
+    ``''::jsonb`` is rejected by Postgres ("invalid input syntax for type json"), which
+    made every ack/resolve transition and every audit row without a `before` fail.
+    """
     if value is None:
-        return ""
+        return None
     return json.dumps(value, separators=(",", ":"), default=str)
 
 
@@ -55,19 +64,48 @@ class IncidentListItem:
 
 
 @dataclass(frozen=True)
+class AlertRecord:
+    """One row of the `alerts` table: an alert sent for an incident and its sink outcome."""
+
+    id: str
+    channel: str
+    severity: str
+    sink_status: str
+    sent_at: object  # asyncpg returns datetime; the API serialises it
+    payload: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class IncidentDetail:
-    """`get_incident` payload: the incident and its ranked candidates with evidence."""
+    """`get_incident` payload: the incident, its ranked candidates with evidence, the LLM
+    summary (None until the explainer has run) and the alerts sent for it, newest first."""
 
     incident: Incident
     primary: Candidate | None
     candidates: list[Candidate]
     evidence_by_candidate: dict[str, list[Evidence]]
+    summary_text: str | None = None
+    alerts: list[AlertRecord] = field(default_factory=list)
 
 
 def _incident_record_args(
     incident: Incident, scenario_id: str | None
 ) -> tuple[
-    str, str | None, int, str, str, str, str, object, object, object | None, str, str, str, str, str
+    str,
+    str | None,
+    int,
+    str,
+    str,
+    str,
+    str,
+    object,
+    object,
+    object | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
 ]:
     """Project `Incident` into the positional tuple `write_incident` passes to asyncpg."""
     return (
@@ -116,12 +154,20 @@ async def write_incident(
                               $13::jsonb, NULLIF($14, '')::text, $15::jsonb)
                     ON CONFLICT (id) DO UPDATE
                     SET revision = EXCLUDED.revision,
-                        state = EXCLUDED.state,
+                        -- A human ack/resolve (via the API) outranks the pipeline still
+                        -- reporting the incident as open; closed_at follows the kept state.
+                        state = CASE
+                            WHEN EXCLUDED.state = 'open' AND incidents.state <> 'open'
+                            THEN incidents.state ELSE EXCLUDED.state
+                        END,
                         severity = EXCLUDED.severity,
                         title = EXCLUDED.title,
                         opened_at = EXCLUDED.opened_at,
                         updated_at = EXCLUDED.updated_at,
-                        closed_at = EXCLUDED.closed_at,
+                        closed_at = CASE
+                            WHEN EXCLUDED.state = 'open' AND incidents.state <> 'open'
+                            THEN incidents.closed_at ELSE EXCLUDED.closed_at
+                        END,
                         services = EXCLUDED.services,
                         signals = EXCLUDED.signals,
                         anomalies = EXCLUDED.anomalies
@@ -200,8 +246,19 @@ async def transition_incident(
     """
     try:
         async with pool.acquire() as conn, conn.transaction():
+            # `Incident` requires `closed_at` exactly when the state is resolved/expired, so a
+            # transition must keep the two in step or the row can no longer be read back.
             updated = await conn.execute(
-                "UPDATE incidents SET state = $1, updated_at = NOW() WHERE id = $2",
+                """
+                    UPDATE incidents
+                    SET state = $1,
+                        updated_at = NOW(),
+                        closed_at = CASE
+                            WHEN $1 IN ('resolved', 'expired') THEN COALESCE(closed_at, NOW())
+                            ELSE NULL
+                        END
+                    WHERE id = $2
+                    """,
                 new_state,
                 incident_id,
             )
@@ -231,6 +288,133 @@ async def transition_incident(
         raise StorageUnavailable(f"transition for {incident_id!r} failed: {e}") from e
 
 
+#: The `audit_log.actor` for rows the pipeline writes itself. Not a GitHub username, so it
+#: can never be confused with a human transition (D25 applies to `X-Actor`, not here).
+PIPELINE_ACTOR = "inframind-pipeline"
+
+#: Cap on the raw provider text kept in the audit row (standard 07.4.5 stores it).
+_RAW_AUDIT_CHARS = 8000
+
+
+async def record_summary(
+    pool: asyncpg.Pool,
+    incident_id: str,
+    *,
+    summary_text: str,
+    provenance: Mapping[str, Any],
+    actor: str = PIPELINE_ACTOR,
+) -> bool:
+    """Store the explainer's summary on the incident and audit the LLM call.
+
+    `provenance` describes the call (provider, model, status such as `accepted` or
+    `template_fallback`, and the provider's raw text); it lands in `audit_log.after` with
+    action `llm_summary`, so every LLM call is traceable (standard 07.4.5). Returns False
+    when the incident row does not exist.
+    """
+    after = dict(provenance)
+    raw = after.get("raw")
+    if isinstance(raw, str) and len(raw) > _RAW_AUDIT_CHARS:
+        after["raw"] = raw[:_RAW_AUDIT_CHARS]
+        after["raw_truncated"] = True
+    try:
+        async with pool.acquire() as conn, conn.transaction():
+            updated = await conn.execute(
+                "UPDATE incidents SET summary_text = $1 WHERE id = $2",
+                summary_text,
+                incident_id,
+            )
+            if updated.endswith(" 0"):
+                return False
+            await conn.execute(
+                """
+                    INSERT INTO audit_log (id, ts, actor, action, target, before, after)
+                    VALUES ($1, NOW(), $2, 'llm_summary', $3, NULL, $4::jsonb)
+                    """,
+                new_ulid(),
+                actor,
+                incident_id,
+                _to_jsonb(after),
+            )
+        return True
+    except (OSError, asyncpg.PostgresError) as e:
+        logger.warning("storage_summary_failed", incident_id=incident_id, error=str(e))
+        raise StorageUnavailable(f"record_summary for {incident_id!r} failed: {e}") from e
+
+
+async def record_alerts(
+    pool: asyncpg.Pool,
+    incident_id: str,
+    *,
+    severity: str,
+    payload: Mapping[str, Any],
+    outcomes: Sequence[tuple[str, str, str]],
+    actor: str = PIPELINE_ACTOR,
+) -> int:
+    """Persist one dispatch: an `alerts` row per sink outcome, plus one audit row.
+
+    `outcomes` is `AlertRouter.dispatch`'s `(alert_id, channel, status)` list (alerting may
+    not import storage, so the caller hands it over, standard 06b.4). The alert ids are
+    appended to `incidents.alerts`. Re-recording the same alert id is a no-op, so an
+    at-least-once redelivery cannot duplicate rows. Returns the number of rows inserted.
+    """
+    if not outcomes:
+        return 0
+    inserted = 0
+    try:
+        async with pool.acquire() as conn, conn.transaction():
+            for alert_id, channel, status in outcomes:
+                result = await conn.execute(
+                    """
+                        INSERT INTO alerts (
+                            id, incident_id, severity, channel, payload, sent_at, sink_status
+                        ) VALUES ($1, $2, $3, $4, $5::jsonb, NOW(), $6)
+                        ON CONFLICT (id) DO NOTHING
+                        """,
+                    alert_id,
+                    incident_id,
+                    severity,
+                    channel,
+                    _to_jsonb(dict(payload, alert_id=alert_id)),
+                    status,
+                )
+                inserted += 0 if result.endswith(" 0") else 1
+            ids = [alert_id for alert_id, _, _ in outcomes]
+            await conn.execute(
+                """
+                    UPDATE incidents
+                    SET alerts = alerts || (
+                        SELECT COALESCE(jsonb_agg(x), '[]'::jsonb)
+                        FROM jsonb_array_elements($2::jsonb) AS x
+                        WHERE NOT alerts @> jsonb_build_array(x)
+                    )
+                    WHERE id = $1
+                    """,
+                incident_id,
+                _to_jsonb(ids),
+            )
+            await conn.execute(
+                """
+                    INSERT INTO audit_log (id, ts, actor, action, target, before, after)
+                    VALUES ($1, NOW(), $2, 'alert', $3, NULL, $4::jsonb)
+                    """,
+                new_ulid(),
+                actor,
+                incident_id,
+                _to_jsonb(
+                    {
+                        "severity": severity,
+                        "sinks": [
+                            {"alert_id": a, "channel": c, "status": s} for a, c, s in outcomes
+                        ],
+                    }
+                ),
+            )
+    except (OSError, asyncpg.PostgresError) as e:
+        logger.warning("storage_alerts_failed", incident_id=incident_id, error=str(e))
+        raise StorageUnavailable(f"record_alerts for {incident_id!r} failed: {e}") from e
+    return inserted
+
+
 async def get_incident(pool: asyncpg.Pool, incident_id: str) -> IncidentDetail | None:
     """Return the full incident with its ranked candidates and evidence, or None."""
     try:
@@ -238,7 +422,8 @@ async def get_incident(pool: asyncpg.Pool, incident_id: str) -> IncidentDetail |
             incident_row = await conn.fetchrow(
                 """
                 SELECT id, revision, state, severity, title, fingerprint,
-                       opened_at, updated_at, closed_at, services, signals, anomalies
+                       opened_at, updated_at, closed_at, services, signals, anomalies,
+                       summary_text
                 FROM incidents WHERE id = $1
                 """,
                 incident_id,
@@ -261,8 +446,28 @@ async def get_incident(pool: asyncpg.Pool, incident_id: str) -> IncidentDetail |
                 """,
                 incident_id,
             )
+            alert_rows = await conn.fetch(
+                """
+                SELECT id, channel, severity, sink_status, sent_at, payload
+                FROM alerts WHERE incident_id = $1
+                ORDER BY sent_at DESC, id DESC
+                """,
+                incident_id,
+            )
     except (OSError, asyncpg.PostgresError) as e:
         raise StorageUnavailable(f"get_incident for {incident_id!r} failed: {e}") from e
+
+    alerts = [
+        AlertRecord(
+            id=row["id"],
+            channel=row["channel"],
+            severity=row["severity"],
+            sink_status=row["sink_status"],
+            sent_at=row["sent_at"],
+            payload=_as_dict(row["payload"]),
+        )
+        for row in alert_rows
+    ]
 
     evidence_by_candidate: dict[str, list[Evidence]] = {}
     for row in evidence_rows:
@@ -308,7 +513,30 @@ async def get_incident(pool: asyncpg.Pool, incident_id: str) -> IncidentDetail |
         primary=candidates[0] if candidates else None,
         candidates=candidates,
         evidence_by_candidate=evidence_by_candidate,
+        summary_text=_row_get(incident_row, "summary_text"),
+        alerts=alerts,
     )
+
+
+def _row_get(row: Any, key: str) -> Any:
+    """`row[key]`, or None when the row has no such column (older fakes in unit tests)."""
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return None
+
+
+def _as_dict(value: object) -> dict[str, Any]:
+    """Decode a JSONB object column into a dict (asyncpg may hand back the raw string)."""
+    if isinstance(value, dict):
+        return value
+    if isinstance(value, str):
+        try:
+            decoded = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+        return decoded if isinstance(decoded, dict) else {}
+    return {}
 
 
 def _as_str_list(value: object) -> list[str]:
@@ -423,11 +651,15 @@ async def record_audit(
 
 
 __all__ = [
+    "PIPELINE_ACTOR",
+    "AlertRecord",
     "IncidentDetail",
     "IncidentListItem",
     "get_incident",
     "list_incidents",
+    "record_alerts",
     "record_audit",
+    "record_summary",
     "transition_incident",
     "write_incident",
 ]

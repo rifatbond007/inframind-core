@@ -54,7 +54,7 @@ owned by the `project-planner` agent (D-change discipline).
 - [ ] Deterministic ranker ranks a known scenario correctly on the dev split.
 - [ ] PageRank variant implemented.
 - [ ] LLM validator rejects fake evidence IDs.
-- [ ] Ollama fallback works without `OPENAI_API_KEY`.
+- [ ] Without an API key (`LLM_API_KEY`/`OPENAI_API_KEY`), Ollama is used when the fallback is on, and the template summary when `INFRAMIND_LLM_OLLAMA_FALLBACK=false` (D28).
 
 ## P6 → P7 (alerting → evaluation)
 
