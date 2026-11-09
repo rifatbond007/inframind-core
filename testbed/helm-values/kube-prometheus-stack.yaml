@@ -44,6 +44,29 @@ prometheus:
     # in-cluster cAdvisor port. The chart's default serviceMonitor
     # selectors cover this; we don't need to override.
     serviceMonitorSelectorNilUsesHelmValues: true
+    # Scrape the InfraMind processes that `make up` runs in docker compose on
+    # the dev host, so the "InfraMind / Signals" Grafana dashboard can graph
+    # the pipeline next to the signals it ingests. KIND_HOST_GATEWAY is the
+    # same placeholder the Alertmanager webhook uses (resolved by
+    # testbed/obs/install.sh). Ports are the host ports in docker-compose.yml.
+    # A stopped process just shows as `up == 0`; no alert rule targets it.
+    # (Under `make up-app` the chart's ServiceMonitor/PodMonitor do this.)
+    additionalScrapeConfigs:
+      - job_name: inframind-compose
+        scrape_interval: 15s
+        static_configs:
+          - targets: ["KIND_HOST_GATEWAY:8080"]
+            labels: {component: api}
+          - targets: ["KIND_HOST_GATEWAY:9100"]
+            labels: {component: detection}
+          - targets: ["KIND_HOST_GATEWAY:9101"]
+            labels: {component: rca}
+          - targets: ["KIND_HOST_GATEWAY:9102"]
+            labels: {component: ingestion-prometheus}
+          - targets: ["KIND_HOST_GATEWAY:9103"]
+            labels: {component: ingestion-loki}
+          - targets: ["KIND_HOST_GATEWAY:9104"]
+            labels: {component: ingestion-jaeger}
   service:
     type: NodePort
     nodePort: 30090
@@ -122,6 +145,13 @@ grafana:
     nodePort: 30300
     port: 3000
     targetPort: 3000
+  # Grafana Live (real-time dashboard push over a WebSocket) is unused
+  # here, and its frontend opens `/api/live/ws` before login, which logs
+  # "WebSocket connection ... failed: HTTP Authentication failed" on the
+  # login page. max_connections: 0 turns Live off.
+  grafana.ini:
+    live:
+      max_connections: 0
   # Pre-load the observability stack as datasources so the smoke test
   # and the eval dashboard (P7) work out of the box. The chart's
   # default provisioning already marks Prometheus as the default
@@ -136,6 +166,11 @@ grafana:
       type: loki
       url: http://loki-gateway:80
       access: proxy
+      # Loki runs without a ruler storage backend, so Grafana's alert
+      # rule pages got a 400 ("GetRuleGroup unsupported in rule local
+      # store") probing it. Alert rules come from Prometheus only.
+      jsonData:
+        manageAlerts: false
     - name: Jaeger
       type: jaeger
       url: http://jaeger-query:16686

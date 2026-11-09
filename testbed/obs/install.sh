@@ -205,6 +205,19 @@ helm upgrade --install "$ALLOY_RELEASE" \
   --wait --timeout "$WAIT_TIMEOUT"
 log_ok "alloy ready"
 
+# --- Grafana dashboards shipped with the testbed ---
+# Every JSON file in testbed/obs/dashboards/ becomes one key of a ConfigMap
+# labelled `grafana_dashboard`, which the kube-prometheus-stack Grafana
+# sidecar watches in all namespaces and loads within a few seconds.
+DASHBOARDS_DIR="$REPO_ROOT/testbed/obs/dashboards"
+log_info "loading Grafana dashboards from $DASHBOARDS_DIR"
+kubectl --context "$CONTEXT_NAME" --kubeconfig "$KUBECONFIG_PATH" \
+  -n "$MONITORING_NAMESPACE" create configmap inframind-dashboards \
+  --from-file="$DASHBOARDS_DIR" --dry-run=client -o yaml \
+  | kubectl label --local -f - grafana_dashboard=1 -o yaml \
+  | kubectl --context "$CONTEXT_NAME" --kubeconfig "$KUBECONFIG_PATH" apply -f - >/dev/null
+log_ok "dashboards loaded (InfraMind / Signals: http://localhost:30300/d/inframind-signals)"
+
 # --- summary ---
 log_ok "observability stack is up"
 log_info "  kubectl --context $CONTEXT_NAME get pods -n $MONITORING_NAMESPACE"
