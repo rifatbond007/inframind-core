@@ -120,7 +120,7 @@ owner with `--reviewer <handle>`.
   force-push (`commit-protocol` section 6).
 - Each fix commit passes the same gates. CI must be green on the final head.
 - A reviewer checks the PR with the `code-reviewer` agent's checklist
-  (`.claude/agents/quality/code-reviewer.md`): D1–D27 compliance, D25 identity, tests,
+  (`.claude/agents/quality/code-reviewer.md`): D1–D28 compliance, D25 identity, tests,
   reproducibility, `PROGRESS.md` row.
 - Do not approve your own PR. Approval comes from a CODEOWNER of the touched area other than
   the author whenever one exists.
