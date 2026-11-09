@@ -33,10 +33,15 @@ IncidentState = Literal["open", "acknowledged", "resolved", "expired"]
 Severity = Literal["info", "warning", "critical"]
 
 
-def _to_jsonb(value: object) -> str:
-    """Serialise `value` for asyncpg JSONB; ``None`` is stored as SQL NULL."""
+def _to_jsonb(value: object) -> str | None:
+    """Serialise `value` for asyncpg JSONB; ``None`` is stored as SQL NULL.
+
+    ``None`` must reach asyncpg as ``None`` (SQL NULL): an empty string cast with
+    ``''::jsonb`` is rejected by Postgres ("invalid input syntax for type json"), which
+    made every ack/resolve transition and every audit row without a `before` fail.
+    """
     if value is None:
-        return ""
+        return None
     return json.dumps(value, separators=(",", ":"), default=str)
 
 
@@ -67,7 +72,21 @@ class IncidentDetail:
 def _incident_record_args(
     incident: Incident, scenario_id: str | None
 ) -> tuple[
-    str, str | None, int, str, str, str, str, object, object, object | None, str, str, str, str, str
+    str,
+    str | None,
+    int,
+    str,
+    str,
+    str,
+    str,
+    object,
+    object,
+    object | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
+    str | None,
 ]:
     """Project `Incident` into the positional tuple `write_incident` passes to asyncpg."""
     return (
@@ -200,8 +219,19 @@ async def transition_incident(
     """
     try:
         async with pool.acquire() as conn, conn.transaction():
+            # `Incident` requires `closed_at` exactly when the state is resolved/expired, so a
+            # transition must keep the two in step or the row can no longer be read back.
             updated = await conn.execute(
-                "UPDATE incidents SET state = $1, updated_at = NOW() WHERE id = $2",
+                """
+                    UPDATE incidents
+                    SET state = $1,
+                        updated_at = NOW(),
+                        closed_at = CASE
+                            WHEN $1 IN ('resolved', 'expired') THEN COALESCE(closed_at, NOW())
+                            ELSE NULL
+                        END
+                    WHERE id = $2
+                    """,
                 new_state,
                 incident_id,
             )
