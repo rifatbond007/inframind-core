@@ -15,8 +15,10 @@ def test_inframind_importable() -> None:
     assert inframind.__version__  # non-empty
 
 
-def test_main_module_runs() -> None:
-    """The placeholder entrypoint exits with status 0."""
+def test_main_version_flag_exits_zero(capsys) -> None:  # type: ignore[no-untyped-def]
+    """`python -m inframind.main --version` prints the version without touching a backend."""
+    import inframind
     from inframind.main import main
 
-    assert main() == 0
+    assert main(["--version"]) == 0
+    assert inframind.__version__ in capsys.readouterr().out

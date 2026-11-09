@@ -143,7 +143,8 @@ def main() -> None:
             Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0")),
             webhook_secret=os.environ.get("INFRAMIND_ALERT_WEBHOOK_SECRET", ""),
             postgres_pool=pool,
-            alerting_router=AlertRouter(),
+            # No AlertRouter here: alerts are dispatched by the rca process, next to the
+            # ranking they describe (D28, standard 06b.4). This process reads them back.
         )
         config = uvicorn.Config(
             app,

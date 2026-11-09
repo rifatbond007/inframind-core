@@ -34,7 +34,8 @@ spec:
         - name: rca
           image: {{ include "inframind.image" . }}
           imagePullPolicy: {{ .Values.image.pullPolicy }}
-          command: ["python", "-m", "inframind.rca.worker"]
+          # The composition root (D28): RCA plus storage, the LLM explainer and alerting.
+          command: ["python", "-m", "inframind.main"]
           ports:
             - name: metrics
               containerPort: {{ .Values.metrics.workerPort }}

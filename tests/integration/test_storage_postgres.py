@@ -6,11 +6,17 @@ pool in the unit tests proves the SQL *shape*, this proves the SQL *runs*.
 
 Each test truncates the tables first so it does not depend on leftover state from a
 previous run. Skipped unless Postgres is reachable at `POSTGRES_URL`.
+
+The tests never touch the database named in `POSTGRES_URL`: that is the one the running
+pipeline stores every incident in (D20), and truncating it wiped them. They run in a
+sibling database, `<name>_test` on the same server, created on first use.
 """
 
 from __future__ import annotations
 
+import json
 from datetime import UTC, datetime
+from urllib.parse import urlsplit, urlunsplit
 
 import asyncpg
 import pytest
@@ -26,7 +32,9 @@ from inframind.storage import (
     get_incident,
     init_schema,
     list_incidents,
+    record_alerts,
     record_audit,
+    record_summary,
     transition_incident,
     write_incident,
 )
@@ -38,13 +46,29 @@ T0 = datetime(2026, 10, 21, 12, 0, 0, tzinfo=UTC)
 TABLES = ("audit_log", "alerts", "evidence", "candidates", "incidents")
 
 
+async def _test_database_dsn(dsn: str) -> str:
+    """The DSN of `<db>_test` next to `dsn`'s database, creating it if it does not exist."""
+    parts = urlsplit(dsn)
+    name = parts.path.lstrip("/") or "postgres"
+    test_name = name if name.endswith("_test") else f"{name}_test"
+    conn = await asyncpg.connect(dsn, timeout=5)
+    try:
+        exists = await conn.fetchval("SELECT 1 FROM pg_database WHERE datname = $1", test_name)
+        if not exists:
+            await conn.execute(f'CREATE DATABASE "{test_name}"')
+    finally:
+        await conn.close()
+    return urlunsplit(parts._replace(path=f"/{test_name}"))
+
+
 @pytest.fixture
 async def pool() -> asyncpg.Pool:
     params, dsn, _ = build_params()
     try:
-        p = await create_pool(params, dsn)
+        test_dsn = await _test_database_dsn(dsn)
+        p = await create_pool(params, test_dsn)
         await init_schema(p)
-    except StorageUnavailable:
+    except (StorageUnavailable, OSError, asyncpg.PostgresError):
         pytest.skip("Postgres not reachable")
     # Clean slate for this test.
     async with p.acquire() as conn:
@@ -257,3 +281,88 @@ async def test_transition_to_resolved_persists_state(pool: asyncpg.Pool) -> None
             "SELECT COUNT(*) FROM audit_log WHERE target = $1", "inc_it_001"
         )
     assert count == 2  # both transitions wrote audit rows
+
+
+# --- D28: the composition root's writes, against real Postgres ---
+
+
+async def test_summary_and_alerts_round_trip_through_get_incident(pool: asyncpg.Pool) -> None:
+    await write_incident(pool, _incident(), [_candidate()])
+    assert await record_summary(
+        pool,
+        "inc_it_001",
+        summary_text="paymentservice is the root cause",
+        provenance={"provider": "OPENAI", "model": "m", "status": "accepted", "raw": "{}"},
+    )
+    inserted = await record_alerts(
+        pool,
+        "inc_it_001",
+        severity="warning",
+        payload={"incident_id": "inc_it_001", "summary_text": "paymentservice is the root cause"},
+        outcomes=[("al_it_1", "console", "delivered"), ("al_it_2", "webhook", "failed")],
+    )
+    assert inserted == 2
+
+    detail = await get_incident(pool, "inc_it_001")
+    assert detail is not None
+    assert detail.summary_text == "paymentservice is the root cause"
+    assert sorted(a.id for a in detail.alerts) == ["al_it_1", "al_it_2"]
+    assert {a.sink_status for a in detail.alerts} == {"delivered", "failed"}
+    assert detail.alerts[0].payload["incident_id"] == "inc_it_001"
+
+    async with pool.acquire() as conn:
+        ids = await conn.fetchval("SELECT alerts FROM incidents WHERE id = $1", "inc_it_001")
+        actions = await conn.fetch(
+            "SELECT action, actor FROM audit_log WHERE target = $1 ORDER BY ts", "inc_it_001"
+        )
+    assert sorted(json.loads(ids) if isinstance(ids, str) else ids) == ["al_it_1", "al_it_2"]
+    assert [r["action"] for r in actions] == ["llm_summary", "alert"]
+    assert {r["actor"] for r in actions} == {"inframind-pipeline"}
+
+
+async def test_a_redelivered_alert_is_not_duplicated(pool: asyncpg.Pool) -> None:
+    await write_incident(pool, _incident(), [_candidate()])
+    outcome = [("al_it_dup", "console", "delivered")]
+    assert await record_alerts(pool, "inc_it_001", severity="warning", payload={}, outcomes=outcome)
+    assert (
+        await record_alerts(pool, "inc_it_001", severity="warning", payload={}, outcomes=outcome)
+        == 0
+    )
+    async with pool.acquire() as conn:
+        rows = await conn.fetchval("SELECT COUNT(*) FROM alerts WHERE id = 'al_it_dup'")
+        ids = await conn.fetchval("SELECT alerts FROM incidents WHERE id = $1", "inc_it_001")
+    assert rows == 1
+    assert (json.loads(ids) if isinstance(ids, str) else ids) == ["al_it_dup"]
+
+
+async def test_a_later_revision_keeps_summary_alerts_and_a_human_ack(pool: asyncpg.Pool) -> None:
+    await write_incident(pool, _incident(), [_candidate()])
+    await record_summary(pool, "inc_it_001", summary_text="why", provenance={"status": "accepted"})
+    await transition_incident(
+        pool, "inc_it_001", new_state="acknowledged", actor="rifatbond007", audit_action="ack"
+    )
+    # The pipeline keeps reporting the incident as open with a new revision.
+    await write_incident(pool, _incident(revision=2), [_candidate()])
+
+    detail = await get_incident(pool, "inc_it_001")
+    assert detail is not None
+    assert detail.incident.revision == 2
+    assert detail.incident.state == "acknowledged"  # the human ack survives
+    assert detail.summary_text == "why"  # the explanation survives
+
+
+async def test_the_pipeline_resolving_closes_an_acknowledged_incident(pool: asyncpg.Pool) -> None:
+    await write_incident(pool, _incident(), [_candidate()])
+    await transition_incident(
+        pool, "inc_it_001", new_state="acknowledged", actor="rifatbond007", audit_action="ack"
+    )
+    resolved_at = datetime(2026, 10, 21, 12, 5, 0, tzinfo=UTC)
+    await write_incident(
+        pool,
+        _incident(revision=3, state="resolved", closed_at=resolved_at, updated_at=resolved_at),
+        [_candidate()],
+    )
+    detail = await get_incident(pool, "inc_it_001")
+    assert detail is not None
+    assert detail.incident.state == "resolved"
+    assert detail.incident.closed_at == resolved_at

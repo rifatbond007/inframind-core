@@ -291,3 +291,56 @@ async def test_no_patch_or_delete_route_exists(client: httpx.AsyncClient) -> Non
     """State transitions are explicit; there is no generic mutation endpoint."""
     assert (await client.patch("/incidents/inc_001", json={"state": "resolved"})).status_code == 405
     assert (await client.delete("/incidents/inc_001")).status_code == 405
+
+
+# --- detail: the LLM summary and the alert history (D28) ---
+
+
+async def test_detail_returns_summary_and_alerts(client: httpx.AsyncClient) -> None:
+    from datetime import UTC, datetime
+
+    from inframind.storage import AlertRecord, IncidentDetail
+
+    incident = _incident()
+    detail = IncidentDetail(
+        incident=incident,
+        primary=_candidate(),
+        candidates=[_candidate()],
+        evidence_by_candidate={},
+        summary_text="paymentservice is the root cause",
+        alerts=[
+            AlertRecord(
+                id="al_1",
+                channel="console",
+                severity="warning",
+                sink_status="delivered",
+                sent_at=datetime(2026, 11, 10, 12, 0, tzinfo=UTC),
+                payload={"incident_id": incident.id},
+            )
+        ],
+    )
+    with patch("inframind.api.incidents.get_incident", AsyncMock(return_value=detail)):
+        resp = await client.get(f"/incidents/{incident.id}")
+
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["summary_text"] == "paymentservice is the root cause"
+    assert body["alerts"] == [
+        {
+            "id": "al_1",
+            "channel": "console",
+            "severity": "warning",
+            "sink_status": "delivered",
+            "sent_at": "2026-11-10T12:00:00Z",
+        }
+    ]
+
+
+async def test_detail_before_any_alert_has_no_summary(client: httpx.AsyncClient) -> None:
+    incident = _incident()
+    with patch(
+        "inframind.api.incidents.get_incident", AsyncMock(return_value=FakeDetail(incident))
+    ):
+        body = (await client.get(f"/incidents/{incident.id}")).json()
+    assert body["summary_text"] is None
+    assert body["alerts"] == []

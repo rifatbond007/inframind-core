@@ -198,3 +198,48 @@ async def test_dispatch_without_candidates_still_alerts(candidates: Any) -> None
 
     assert result.alerted is True
     assert result.delivered_any is True
+
+
+# --- the composition root's view of the router (D28) ---
+
+
+async def test_should_dispatch_has_no_side_effect_and_matches_dispatch() -> None:
+    router = AlertRouter(AlertingParams(console_enabled=True))
+    incident = _incident()
+    assert router.should_dispatch(incident) is True
+    assert router.should_dispatch(incident) is True  # peeking does not consume the alert
+    with patch("inframind.alerting.sinks.console.send", lambda p: ("al_1", "delivered")):
+        result = await router.dispatch(incident, [_candidate()], summary_text="s")
+    assert result.alerted
+    assert router.should_dispatch(incident) is False  # dedup now holds it
+
+
+async def test_dispatch_returns_the_payload_it_sent() -> None:
+    router = AlertRouter(AlertingParams(console_enabled=True))
+    sent: list[dict[str, Any]] = []
+
+    def fake_console(payload: dict[str, Any]) -> tuple[str, str]:
+        sent.append(payload)
+        return "al_1", "delivered"
+
+    with patch("inframind.alerting.sinks.console.send", fake_console):
+        result = await router.dispatch(_incident(), [_candidate()], summary_text="why")
+    assert result.payload == sent[0]
+    assert result.payload["summary_text"] == "why"
+
+
+async def test_a_suppressed_dispatch_has_an_empty_payload() -> None:
+    router = AlertRouter(AlertingParams(console_enabled=True))
+    with patch("inframind.alerting.sinks.console.send", lambda p: ("al_1", "delivered")):
+        await router.dispatch(_incident(), [_candidate()])
+        again = await router.dispatch(_incident(), [_candidate()])
+    assert again.alerted is False
+    assert again.payload == {}
+
+
+async def test_forget_re_arms_a_closed_incident() -> None:
+    router = AlertRouter(AlertingParams(console_enabled=True))
+    with patch("inframind.alerting.sinks.console.send", lambda p: ("al_1", "delivered")):
+        await router.dispatch(_incident(), [_candidate()])
+    router.forget("inc_abc")
+    assert router.should_dispatch(_incident()) is True

@@ -312,6 +312,47 @@ slow sink must not hold an api worker — is a D-change. That requirement
 does not exist at `kind` scale, and inventing the seam before it is needed
 would be speculative.
 
+**Amended by D28:** alerting now runs in the `rca` process next to the
+explainer (the api's `AlertRouter` was constructed but never dispatched).
+
+## D28-CompositionRoot. `inframind.main` wires RCA → LLM → alerting → storage
+
+The deployed `rca` process runs `python -m inframind.main`, the one module
+allowed to import `rca`, `llm`, `alerting` and `storage` together. It is the
+RCA worker of `inframind.rca.worker` plus an injected `on_analysis` hook
+(`IncidentPipeline`) that, for every ranked incident revision:
+
+1. writes the incident, its ranked candidates and their evidence to Postgres
+   (`write_incident`, D20);
+2. when an alert is due (`AlertRouter.should_dispatch`: first time, severity
+   escalation, or after the dedup window), calls `llm.explain` and stores
+   the summary plus an `llm_summary` audit row (`record_summary`);
+3. dispatches the alert and stores one `alerts` row per sink outcome plus an
+   `alert` audit row (`record_alerts`).
+
+The `rca` package still imports only `common`; `tests/unit/test_module_dag.py`
+pins `main` as the only root module that may join `rca` with the post-RCA
+layers. The hand-off stays in-process with no new stream key (standard
+06b.4); a storage failure leaves the incident pending on the bus, so it is
+redelivered, re-ranked and stored.
+
+The explainer calls a hosted OpenAI-compatible API (Groq on the testbed:
+`LLM_BASE_URL`, `LLM_MODEL`, `LLM_API_KEY`). `INFRAMIND_LLM_OLLAMA_FALLBACK`
+turns the D9 local fallback off on hosts that cannot run a model; then a
+missing key or a failed call degrades to the deterministic template summary.
+D9's fallback stays supported and on by default.
+
+**Why:** standard 06b.4 puts the RCA worker, the explainer and the alert
+router in one process with the caller persisting the outcome, but the
+module DAG (standards 01 §1.3) lets no package import all four, so nothing
+ever called them together: the live pipeline ranked incidents and stored
+none of them. A root module is the smallest seam that composes them without
+loosening any package's edges.
+
+**Trigger to revisit:** an LLM latency or cost profile that makes the
+synchronous call hold up ranking, or a requirement for durable RCA results
+across crashes (both would justify a stream key, which is a D-change).
+
 ## D-Setup. Step 0 only scaffolds the repo
 
 Step 0 (this phase) creates the module skeletons, tooling, CI, and dev compose. No functional
@@ -336,6 +377,8 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 - **D21** · 2026-10-11 · The service dependency graph is a single pinned primitive called `ServiceGraph`, owned by the RCA worker (one replica), with edges `caller -> callee`, weighted by `p95_latency_ms * log(call_count)` over the last 100 samples (α = 0.1 EWMA). Cold-start seed from `RCA_GRAPH_PATH`. Live updates from the OTel / Jaeger collector over the pinned Redis stream `stream:graph-updates`. Edges age out via `GRAPH_DECAY_HALF_LIFE_S`; an edge below `GRAPH_MIN_OBSERVATIONS` is held back. Snapshot every 60 s and on `SIGTERM`; corrupt snapshot -> cold start, never a crash. · Why: the graph is consumed by the RCA walker, the PageRank baseline, the correlation severity classifier, and the LLM evidence bundler — six call sites in total. Without a pinned primitive, every consumer invents its own, and a deviation is a silent scoring bug. The single-writer / single-reader model also satisfies the D6 reproducibility contract: same `scenario_id + seed` -> same `GraphUpdate` sequence -> same in-memory graph -> same ranking. · Alternatives: (a) rebuild the graph on every incident from raw traces — rejected for hot-path latency (1–5 ms per request). (b) Reuse `stream:signals` for graph updates — rejected because `GraphUpdate` has a different shape and a different consumer lifecycle. (c) Store the live copy in Postgres — rejected because the ranker needs O(1) edge access, not a SQL round-trip. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/13-service-graph-contract.md`.
 
 - **D27-InProcessAlertingLlm** · 2026-10-21 · The Helm chart ships four Deployments (`api`, `ingestion`, `detection`, `rca`), not seven. Alerting lives in `api.app.AlertRouter`; the LLM explainer lives in `rca.worker` as a synchronous `llm.explain()` call. `ingestion` is one Deployment with three collector containers. · Why: a Deployment is a failure domain, not a stage label. Neither folded stage has an independent scaling axis (D1 makes the LLM presentation-only) nor an independent failure requirement, so separate Deployments would add two pods to `kubectl get pods` whose health carries no information — the same misread the `coverage` block prevents on the numbers side. · Alternatives: (a) ship seven Deployments as `standard 11` section 11.2 literally reads — rejected as speculative scaffolding for a requirement that does not exist at `kind` scale. (b) split the LLM into a Deployment *and* make the call asynchronous — rejected because D1 makes the summary presentation-only, so an async boundary would buy nothing and cost an extra queue. (c) run the three collectors as three Deployments — rejected because they poll the same observability pods and share a failure domain. · Status: approved by team. Trigger to revisit: independent LLM autoscaling or alerting backpressure. Cross-ref: `docs/standards/11-helm-packaging.md` sections 11.2 and 11.12.
+
+- **D28-CompositionRoot** · 2026-11-10 · `src/inframind/main.py` is the composition root: the `rca` process (compose and Helm) runs `python -m inframind.main`, which is the RCA worker plus an injected `on_analysis` hook that stores every ranked incident revision in Postgres, calls the LLM explainer only when an alert is due, dispatches the alert, and stores the summary, the alert rows and their audit rows. Alerting moves from the api process (where its router was never dispatched) to the rca process, amending D27. The LLM is a hosted OpenAI-compatible API (Groq on the testbed) configured by the `LLM_*` contract names; `INFRAMIND_LLM_OLLAMA_FALLBACK=false` disables the D9 local fallback on hosts that cannot run a model. · Why: no package in the module DAG may import `rca`, `llm`, `alerting` and `storage` together, so the chain standard 06b.4 describes was never wired and live incidents never reached Postgres, the LLM or a sink. A single root module composes them without loosening any package edge; `test_module_dag.py` pins `main` as the only root module that may. · Alternatives: (a) a new `stream:rca-results` key consumed by the api — rejected: a D-change to the pinned streams, contradicts 06b.4, and the api still may not import `llm`. (b) widen the `rca` or `alerting` DAG edges — rejected: it would let the ranker depend on the explainer, the opposite of D1. · Status: approved by the user (Md. Rifat Hossain) 2026-11-10; supervisor review pending. Cross-ref: `docs/standards/06b-storage-and-alerting.md` §06b.4, `docs/standards/07-llm-explainer.md`.
 
 - **D22** · 2026-10-11 · `change_correlation` is the pinned algorithm for the RCA `w4` term. Source is a single in-process K8s API watch on `Deployment`, `StatefulSet`, `DaemonSet`, `ConfigMap`, `Secret`, `HorizontalPodAutoscaler` (filtered to `.spec.template`, `.data`, `.spec.replicas` respectively), scoped to `INFRAMIND_WATCH_NAMESPACES`. Captures metadata only — **no Secret values stored**. Correlation uses a 30-minute pre-window (`CHANGE_CORRELATION_PRE_WINDOW_S`) before `incident.opened_at`, with recency-weighted soft saturation, returning a float in `[0, 1]`. The `change_events` Postgres table is append-only (D20). The watcher's `Role` extends the existing read-only `Role` (section 11.5) with `secrets` `get` / `list` / `watch` only — no write verbs, no `pods/exec`. · Why: the `w4` term is named and weighted in section 6.4 but had no algorithm. Without a pinned spec, every implementation invents its own and the D6 reproducibility contract breaks at the `w4` term. The K8s API watch (not the audit log) matches the existing read-only RBAC scope with a minimal extension. · Alternatives: (a) Watch the audit log — rejected for being more privileged than needed. (b) Poll the K8s API on a timer — rejected because polling misses bursts of changes between polls. (c) Use a sidecar — rejected because it adds a new `Deployment` with its own lifecycle for a single consumer. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/14-change-correlation.md`.
 

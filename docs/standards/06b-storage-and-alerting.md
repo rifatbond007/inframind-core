@@ -116,6 +116,14 @@ Python call:
 await router.dispatch(incident, candidates, summary_text=summary.summary_text)
 ```
 
+The process is `python -m inframind.main` (D28): the composition root that wraps the RCA
+worker with an `on_analysis` hook. Per ranked incident revision it calls `write_incident`;
+when `router.should_dispatch(incident)` is true it calls `llm.explain`, then
+`record_summary`, `router.dispatch`, and `record_alerts` with the returned outcomes and
+payload. A closed incident calls `router.forget`. `write_incident` never overwrites
+`summary_text` or `alerts`, and a human `acknowledged`/`resolved` state outranks a later
+pipeline revision that still reports `open`.
+
 This is the simplest correct reading of D20 ("storage is the source of truth, the bus is
 the conduit") and it avoids a D-change to the pinned stream keys in
 `common/stream_keys.py` — renaming or adding one is a locked decision requiring supervisor

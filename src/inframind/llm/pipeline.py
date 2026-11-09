@@ -31,7 +31,7 @@ from .client import (
     OpenAIClient,
     with_fallback,
 )
-from .config import LLMParams, load_llm_params, should_fallback_to_ollama
+from .config import LLMParams, llm_api_key, load_llm_params, should_fallback_to_ollama
 from .prompt import PROMPT_VERSION, build_prompt
 from .types import LLMSummary
 from .validator import ValidationResult, summarise_with_validation, template_summary
@@ -113,11 +113,12 @@ def explain(
 
 
 def _build_call(params: LLMParams) -> Callable[[str], str]:
-    """Return a zero-arg-free callable `(prompt) -> str` honouring the D9 fallback.
+    """Return a callable `(prompt) -> str` honouring the D9 fallback.
 
-    When the primary provider is OpenAI and the fallback condition holds (no API key), or
-    the OpenAI adapter fails at runtime, Ollama is attempted as fallback. When Ollama is
-    also unavailable the original error propagates for `explain` to degrade on.
+    When the primary provider is the OpenAI-compatible API and the fallback condition holds
+    (no API key), or the adapter fails at runtime, Ollama is attempted as fallback. When
+    Ollama is also unavailable — or switched off with `ollama_fallback=False` — the error
+    propagates as `LLMNetworkError` for `explain` to degrade to the template summary.
     """
     import os
 
@@ -127,12 +128,44 @@ def _build_call(params: LLMParams) -> Callable[[str], str]:
         client = OllamaClient(params)
         return client.summarise
 
-    primary = OpenAIClient(params, env.get("OPENAI_API_KEY", "").strip())
+    api_key = llm_api_key(env)
+    primary = OpenAIClient(params, api_key)
+    if not params.ollama_fallback:
+        if not api_key:
+            # No key and no local model: never make a network call, go to the template.
+            return _unavailable("no LLM_API_KEY configured and the Ollama fallback is off")
+        return _network_errors_only(primary.summarise)
     if should_fallback_to_ollama(params, env):
         # No key configured: skip the doomed primary call entirely.
-        logger.info("no OPENAI_API_KEY; using the Ollama fallback (standard 07.6)")
+        logger.info("no LLM_API_KEY; using the Ollama fallback (standard 07.6)")
         return OllamaClient(params).summarise
     return with_fallback(primary.summarise, OllamaClient(params).summarise)
+
+
+def _unavailable(reason: str) -> Callable[[str], str]:
+    """A provider call that always fails as unreachable, so `explain` uses the template."""
+
+    def call(prompt: str) -> str:
+        raise LLMNetworkError(reason)
+
+    return call
+
+
+def _network_errors_only(call: Callable[[str], str]) -> Callable[[str], str]:
+    """Map an auth failure to `LLMNetworkError` when there is no fallback to try.
+
+    `explain` degrades to the template on `LLMNetworkError`; a rejected key must degrade the
+    same way instead of escaping as an exception from the RCA worker.
+    """
+    from .client import LLMAuthenticationError
+
+    def wrapped(prompt: str) -> str:
+        try:
+            return call(prompt)
+        except LLMAuthenticationError as e:
+            raise LLMNetworkError(f"LLM API rejected the key: {e}") from e
+
+    return wrapped
 
 
 __all__ = ["explain"]

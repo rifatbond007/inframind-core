@@ -52,11 +52,18 @@ config:
   # Per-stage tuning. Keyed INFRAMIND_<LAYER>_<FIELD>; see docs/surface-map.md.
   INFRAMIND_RCA_GRAPH_PATH: "/app/data/service-graph.json"
   INFRAMIND_WATCH_NAMESPACES: "boutique,inframind"
+  # LLM explainer (read by the rca process, D28): an OpenAI-compatible API, Groq by
+  # default. The key comes from secretRef.LLM_API_KEY. No local Ollama fallback.
+  LLM_PROVIDER: "openai"
+  LLM_BASE_URL: "https://api.groq.com/openai/v1"
+  LLM_MODEL: "openai/gpt-oss-120b"
+  LLM_TIMEOUT_S: "20"
+  INFRAMIND_LLM_OLLAMA_FALLBACK: "false"
 
 # --- secrets ---
 # Placeholders only. Populated at install time:
 #   helm upgrade --install inframind deploy/helm/inframind \
-#     --set secretRef.LLM_API_KEY="$OPENAI_API_KEY"
+#     --set secretRef.LLM_API_KEY="$LLM_API_KEY"
 secretRef:
   LLM_API_KEY: ""
   INFRAMIND_ALERT_WEBHOOK_SECRET: ""

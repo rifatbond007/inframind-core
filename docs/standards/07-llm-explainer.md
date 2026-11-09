@@ -71,7 +71,11 @@ no exceptions. A unit test asserts the full pattern set.
 
 ## 7.6 The local-LLM fallback (D9)
 
-- `LLM_PROVIDER=OPENAI` (default) — calls the OpenAI API. Requires `OPENAI_API_KEY`.
+- `LLM_PROVIDER=OPENAI` (default) — calls an OpenAI-compatible chat API: OpenAI itself, or a
+  hosted provider reached through `LLM_BASE_URL` (the testbed uses Groq,
+  `https://api.groq.com/openai/v1`, model `openai/gpt-oss-120b`). Requires
+  `LLM_API_KEY` (`OPENAI_API_KEY` is accepted when `LLM_API_KEY` is empty). `LLM_MODEL` and
+  `LLM_TIMEOUT_S` set the model and the per-call timeout.
 - `LLM_PROVIDER=OLLAMA` — calls a local Ollama endpoint. No API key required.
 
 Both adapters live in `src/inframind/llm/client.py`. The adapter contract is the same:
@@ -79,9 +83,18 @@ Both adapters live in `src/inframind/llm/client.py`. The adapter contract is the
 
 Ollama is the fallback when:
 
-- `OPENAI_API_KEY` is empty or unset.
+- no API key is set (`LLM_API_KEY` and `OPENAI_API_KEY` both empty).
 - The OpenAI adapter raises `openai.AuthenticationError` or a network error.
 - The operator has explicitly set `LLM_PROVIDER=OLLAMA`.
+
+`INFRAMIND_LLM_OLLAMA_FALLBACK=false` switches the fallback off for hosts that cannot run a
+local model (D28). Then a missing key, a rejected key, or a failed call degrades straight to
+the deterministic template summary (7.4.4), and no request is ever sent to Ollama. The
+fallback stays on by default (D9).
+
+The explainer runs in the `rca` process (`inframind.main`, D28), once per alert rather than
+once per incident revision, and every call is audited (`audit_log.action = 'llm_summary'`,
+with the provider, model, validation status and raw reply).
 
 ## 7.7 Reproducibility
 

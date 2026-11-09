@@ -26,7 +26,7 @@ deploy/helm/inframind/
 │   ├── deployment-api.yaml     # inframind.api.app
 │   ├── deployment-ingestion.yaml   # 3 containers: prom / loki / jaeger collectors
 │   ├── deployment-detection.yaml   # inframind.correlation.worker
-│   ├── deployment-rca.yaml     # inframind.rca.worker + emptyDir /app/data
+│   ├── deployment-rca.yaml     # inframind.main (RCA + LLM + alerting + storage, D28) + emptyDir /app/data
 │   ├── service.yaml            # ClusterIP for the api
 │   ├── ingress.yaml            # disabled by default; D8 says no public Ingress
 │   ├── servicemonitor.yaml     # api /metrics on 8080

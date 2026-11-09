@@ -16,7 +16,11 @@ a no-op on the graph and a redelivered incident re-ranks deterministically to th
 The graph is snapshotted to `RCA_GRAPH_PATH` on a timer and on SIGTERM (standard 13.6). A
 corrupt snapshot never crashes the worker — it cold-starts (standard 13.6).
 
-Run with: ``python -m inframind.rca.worker``
+What happens to a ranking is injected as `on_analysis` (D28): this package may import only
+`common` (standards 01 §1.3), so persisting it, summarising it with the LLM and alerting on
+it are wired by the composition root `inframind.main`, which is what the deployed `rca`
+process runs. ``python -m inframind.rca.worker`` still runs the ranker alone (it logs the
+ranking and stores nothing), which is useful for debugging RCA in isolation.
 """
 
 from __future__ import annotations
@@ -24,7 +28,7 @@ from __future__ import annotations
 import asyncio
 import os
 import signal as os_signal
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from datetime import datetime
 from pathlib import Path
 
@@ -68,6 +72,11 @@ class IncidentAnalysis(BaseModel):
         return self.candidates[0] if self.candidates else None
 
 
+#: What to do with each ranking (D28). Raising leaves the incident pending on the bus, so it
+#: is redelivered and re-ranked; the hook must therefore tolerate a repeated call.
+AnalysisHook = Callable[[Incident, "IncidentAnalysis"], Awaitable[None]]
+
+
 class RCAWorker:
     """Consumes graph updates and incidents; owns the graph and produces ranked candidates."""
 
@@ -83,8 +92,10 @@ class RCAWorker:
         block_ms: int = 1000,
         start_id: str = "0",
         change_events: Sequence[ChangeEvent] = (),
+        on_analysis: AnalysisHook | None = None,
     ) -> None:
         self._redis = redis
+        self._on_analysis = on_analysis
         self._graph = graph
         self._params = params or RCAParams()
         self._graph_consumer = TypedStreamConsumer(
@@ -130,7 +141,7 @@ class RCAWorker:
         return await self._incident_consumer.poll_once(self.handle_incident)
 
     async def handle_incident(self, incident: Incident) -> None:
-        """Analyse one incident snapshot and log the ranking."""
+        """Analyse one incident snapshot, log the ranking, and hand it to `on_analysis`."""
         analysis = self.analyse(incident)
         primary = analysis.primary
         log.info(
@@ -143,6 +154,8 @@ class RCAWorker:
             primary=primary.service if primary else None,
             primary_score=primary.score if primary else None,
         )
+        if self._on_analysis is not None:
+            await self._on_analysis(incident, analysis)
 
     def analyse(self, incident: Incident) -> IncidentAnalysis:
         """Pure RCA: walk, bundle evidence, score. No I/O, no clock (standard 06.7).
@@ -223,25 +236,38 @@ def _symptom_services(incident: Incident) -> list[str]:
     return with_anomalies or sorted(incident.services)
 
 
-async def amain() -> None:
-    """Run until SIGINT/SIGTERM. Reads REDIS_URL, RCA_GRAPH_PATH, INFRAMIND_RCA_*."""
-    configure_logging()
-    metrics_start_http_server(int(os.environ.get("METRICS_PORT", "9100")))
-    stop = asyncio.Event()
-    loop = asyncio.get_running_loop()
-    for sig in (os_signal.SIGINT, os_signal.SIGTERM):
-        loop.add_signal_handler(sig, stop.set)
+async def run_worker(stop: asyncio.Event, *, on_analysis: AnalysisHook | None = None) -> None:
+    """Build the worker from env and run it until `stop` is set.
 
+    Reads REDIS_URL, RCA_GRAPH_PATH and INFRAMIND_RCA_*. Shared by this module's `amain`
+    (ranker only) and by `inframind.main` (ranker plus the persistence/LLM/alerting hook).
+    """
     params = load_rca_params()
     graph_path = Path(os.environ.get("RCA_GRAPH_PATH", "data/service-graph.json"))
     graph = ServiceGraph(seed_path=graph_path, params=params)
     redis = Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
 
-    worker = RCAWorker(redis, graph, params=params)
+    worker = RCAWorker(redis, graph, params=params, on_analysis=on_analysis)
     try:
         await worker.run(stop)
     finally:
         await redis.aclose()
+
+
+def stop_on_signals() -> asyncio.Event:
+    """An event set on SIGINT/SIGTERM. Call from inside the running event loop."""
+    stop = asyncio.Event()
+    loop = asyncio.get_running_loop()
+    for sig in (os_signal.SIGINT, os_signal.SIGTERM):
+        loop.add_signal_handler(sig, stop.set)
+    return stop
+
+
+async def amain() -> None:
+    """Run the ranker alone until SIGINT/SIGTERM (no persistence, LLM or alerting)."""
+    configure_logging()
+    metrics_start_http_server(int(os.environ.get("METRICS_PORT", "9100")))
+    await run_worker(stop_on_signals())
 
 
 if __name__ == "__main__":

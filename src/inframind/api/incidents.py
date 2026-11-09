@@ -43,6 +43,19 @@ def _incident_response(detail: Any) -> dict[str, Any]:
         "signals": incident.signals,
         "candidates": [c.model_dump(mode="json") for c in detail.candidates],
         "primary": detail.primary.service if detail.primary else None,
+        # The LLM explanation of the ranking (D1: presentation only), or the deterministic
+        # template when no LLM answer was usable; None until the first alert is sent.
+        "summary_text": getattr(detail, "summary_text", None),
+        "alerts": [
+            {
+                "id": a.id,
+                "channel": a.channel,
+                "severity": a.severity,
+                "sink_status": a.sink_status,
+                "sent_at": a.sent_at,
+            }
+            for a in getattr(detail, "alerts", [])
+        ],
     }
 
 
