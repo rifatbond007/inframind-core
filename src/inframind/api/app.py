@@ -50,6 +50,11 @@ def create_app(
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/favicon.ico", include_in_schema=False)
+    async def favicon() -> Response:
+        """204, so a browser opening the JSON API does not log a 404 for the icon."""
+        return Response(status_code=204)
+
     @app.get("/readyz")
     async def readyz() -> Response:
         """200 only when Redis AND Postgres respond; 503 naming the failing dependency."""
