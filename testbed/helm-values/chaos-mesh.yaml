@@ -118,12 +118,15 @@ chaosDaemon:
 # --- Dashboard (disabled for slim default) ---
 # The dashboard is a 1-pod React app; it adds ~150 MiB and isn't on the
 # smoke-test path. Re-enable in the `make testbed-full` profile.
+# The chart 2.7.2 key is `create`, not `enabled`: `enabled: false` was
+# silently ignored, so the dashboard ran anyway (and asked for a token).
 dashboard:
-  enabled: false
+  create: false
 
 # --- DNS Chaos (we don't need it for P1/P7) ---
+# Same chart quirk as the dashboard: the key is `create`.
 dnsServer:
-  enabled: false
+  create: false
 
 # --- Webhook server (RBAC) ---
 # Required for chaos experiments that need ServiceAccount manipulation.

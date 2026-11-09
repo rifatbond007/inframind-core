@@ -261,8 +261,14 @@ smoke-rca: ## verify the P5 RCA unit tests: graph + walk + PageRank + worker (no
 	$(PYTEST) tests/unit/rca/ -q
 
 .PHONY: smoke-ingestion
-smoke-ingestion: ## verify the P3 gate live: API + 3 collectors + a real alert (needs `make up`, port 8080 free)
-	$(PY) testbed/smoke_ingestion.py
+smoke-ingestion: ## verify the P3 gate live: API + 3 collectors + a real alert (needs `make up`; pauses the compose api on :8080)
+	@# `make up` runs the compose `api` on :8080, the port the in-cluster Alertmanager targets and
+	@# the smoke API must bind. Pause it for the run and restart it afterwards, pass or fail.
+	@api_running=$$($(COMPOSE) ps -q --status running api 2>/dev/null); \
+	if [ -n "$$api_running" ]; then echo "[smoke-ingestion] pausing compose api (port 8080)"; $(COMPOSE) stop api >/dev/null; fi; \
+	$(PY) testbed/smoke_ingestion.py; rc=$$?; \
+	if [ -n "$$api_running" ]; then echo "[smoke-ingestion] restarting compose api"; $(COMPOSE) start api >/dev/null; fi; \
+	exit $$rc
 
 .PHONY: smoke-testbed
 smoke-testbed: ## verify the P1 → P2 gate (6 checks; see testbed/README.md §4)

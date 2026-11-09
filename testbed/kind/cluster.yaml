@@ -111,3 +111,27 @@ kubeadmConfigPatches:
       # different range.
       podSubnet: "10.244.0.0/16"
       serviceSubnet: "10.96.0.0/16"
+    # Control-plane metrics on all interfaces. kubeadm binds these to
+    # 127.0.0.1, so kube-prometheus-stack's ServiceMonitors (ports
+    # 10257/10259/2381, already pointed at the node IP) could never
+    # scrape them, and its standard TargetDown / KubeSchedulerDown /
+    # KubeControllerManagerDown / etcdMembersDown /
+    # etcdInsufficientMembers rules fired permanently. Those false
+    # alerts reached the InfraMind webhook as signals and would inflate
+    # the raw-Alertmanager baseline's false alarms (D6/D7). The node is
+    # only reachable on the local kind docker network.
+    controllerManager:
+      extraArgs:
+        bind-address: "0.0.0.0"
+    scheduler:
+      extraArgs:
+        bind-address: "0.0.0.0"
+    etcd:
+      local:
+        extraArgs:
+          listen-metrics-urls: "http://0.0.0.0:2381"
+  - |
+    # kube-proxy metrics (10249) for the same reason (KubeProxyDown).
+    kind: KubeProxyConfiguration
+    apiVersion: kubeproxy.config.k8s.io/v1alpha1
+    metricsBindAddress: "0.0.0.0:10249"

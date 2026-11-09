@@ -120,7 +120,8 @@ def evaluate(signals: list[Signal], updates: list[GraphUpdate], run_id: str) -> 
 
 
 def say(status: str, text: str) -> None:
-    print(f"[smoke-ingestion] {status}: {text}", flush=True)
+    # Named after the running gate: smoke_detection.py imports this helper too.
+    print(f"[{Path(sys.argv[0]).stem.replace('_', '-')}] {status}: {text}", flush=True)
 
 
 def _env(name: str, default: str) -> str:

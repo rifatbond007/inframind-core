@@ -124,10 +124,29 @@ write:
 # The gateway is the ClusterIP service inside the cluster. Grafana's
 # datasource URL (`http://loki-gateway:80`) talks to it directly. We
 # also expose it on NodePort 30100 for `make smoke-testbed`'s
-# `curl http://localhost:30100/ready` check.
+# `curl http://localhost:30100/loki/api/v1/status/buildinfo` check.
 gateway:
   enabled: true
   replicas: 1
+  # The chart's default anti-affinity (one gateway per node, required) and
+  # RollingUpdate deadlock on the 1-worker slim cluster: the surge pod
+  # can never schedule while the old pod holds the only worker, so any
+  # gateway config change left the new pod Pending forever. Recreate
+  # stops the old pod first (a few seconds of gateway downtime on upgrade).
+  deploymentStrategy:
+    type: Recreate
+  # The chart's nginx does not proxy Loki's /ready (it 404s), and a
+  # browser opening the gateway asks for /favicon.ico (another 404).
+  # Proxy the readiness probe and answer the favicon with 204.
+  nginxConfig:
+    serverSnippet: |
+      location = /ready {
+        proxy_pass       http://loki.monitoring.svc.cluster.local:3100$request_uri;
+      }
+      location = /favicon.ico {
+        access_log off;
+        return 204;
+      }
   resources:
     limits:
       cpu: 200m
