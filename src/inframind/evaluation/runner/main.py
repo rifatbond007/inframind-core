@@ -222,6 +222,33 @@ def _run_baselines(
     return rows
 
 
+def _dirty_baseline(spec: ScenarioSpec, fixture_dir: Path, repeat: int) -> bool:
+    """True (and logged) when a live recording's baseline holds an anomaly (see replay).
+
+    Only live recordings are checked (`recorded_live` in `meta.json`); a dirty one yields no
+    row, so the report's coverage shows the gap instead of a contaminated score.
+    """
+    import json
+
+    from ..schema import FixtureMeta
+    from .replay import pre_fault_anomalies, replay_signals
+
+    meta_path = fixture_dir / "meta.json"
+    if not meta_path.exists() or not json.loads(meta_path.read_text()).get("recorded_live"):
+        return False
+    onset = FixtureMeta.from_json(meta_path).onset_ts
+    found = pre_fault_anomalies(replay_signals(fixture_dir / "signals.ndjson"), onset)
+    if found:
+        log.warning(
+            "fixture_dirty_baseline",
+            scenario_id=spec.scenario_id,
+            repeat=repeat,
+            pre_fault_anomalies=found,
+            hint="an earlier fault is inside this recording's baseline; re-record it",
+        )
+    return found > 0
+
+
 def _run_one(
     *,
     spec: ScenarioSpec,
@@ -243,6 +270,8 @@ def _run_one(
             repeat=repeat,
             fixture_dir=str(fixture_dir),
         )
+        return []
+    if _dirty_baseline(spec, fixture_dir, repeat):
         return []
 
     run_id = make_run_id(spec=spec, seed=seed, repeat=repeat, method=method)

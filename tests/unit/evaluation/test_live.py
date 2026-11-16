@@ -408,3 +408,50 @@ def test_a_fault_from_an_aborted_run_still_delays_the_next_one(tmp_path: Path) -
     fault_over = T0 + timedelta(seconds=spec.duration_s + spec.cooldown_s)
     assert done.meta.onset_ts - timedelta(seconds=600) >= fault_over
     assert not (fixtures / "r3" / FAULT_MARKER).exists()
+
+
+def test_read_signals_drops_late_published_lines_from_before_the_window() -> None:
+    """Publish time is in range but `ts` is not: the line belongs to an earlier minute."""
+    redis = fakeredis.FakeRedis()
+    late = _signal(T0 - timedelta(seconds=240))  # observed 4 min before the window
+    _xadd(redis, stream_keys.SIGNALS, T0 + timedelta(seconds=5), late.model_dump_json())
+    inside = _signal(T0 + timedelta(seconds=10))
+    _xadd(redis, stream_keys.SIGNALS, T0 + timedelta(seconds=11), inside.model_dump_json())
+    got = read_signals(redis, T0, T0 + timedelta(seconds=60))
+    assert [s.id for s in got] == [inside.id]
+
+
+def _live_fixture(root: Path, *, burst_before_onset: bool) -> Path:
+    """A minimal live recording: quiet CPU samples, optionally an error burst pre-fault."""
+    d = root / "r0"
+    d.mkdir(parents=True)
+    signals = [_signal(T0 + timedelta(seconds=s)) for s in range(-600, 120, 30)]
+    if burst_before_onset:
+        signals += [
+            Signal(
+                ts=T0 - timedelta(seconds=300, milliseconds=-i),
+                source=Source.LOKI,
+                type=SignalType.LOG,
+                service="frontend",
+                severity=Severity.CRITICAL,
+                attrs={"message": "could not retrieve cart"},
+            )
+            for i in range(6)
+        ]
+    signals.sort(key=lambda s: (s.ts, s.id))
+    (d / "signals.ndjson").write_text("".join(s.model_dump_json() + "\n" for s in signals))
+    meta = FixtureMeta("dev-podchaos-01-cartservice-pod-kill", 1001, 0, T0, 240.0, T0)
+    (d / "meta.json").write_text(json.dumps({**meta.as_dict(), "recorded_live": True}))
+    (d / "graph.json").write_text('{"edges": [], "callers": {}}')
+    return d
+
+
+def test_a_recording_with_an_anomaly_in_its_baseline_is_not_scored(tmp_path: Path) -> None:
+    """The live dev-01 r1/r3 case: an earlier fault inside the baseline means no row."""
+    from inframind.evaluation.runner.main import _dirty_baseline
+
+    spec = _spec("dev-podchaos-01-cartservice-pod-kill")
+    dirty = _live_fixture(tmp_path / "dirty", burst_before_onset=True)
+    clean = _live_fixture(tmp_path / "clean", burst_before_onset=False)
+    assert _dirty_baseline(spec, dirty, 0) is True
+    assert _dirty_baseline(spec, clean, 0) is False

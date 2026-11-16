@@ -209,19 +209,24 @@ def _iter_stream(redis: Any, stream: str, start_ms: int, end_ms: int) -> Iterato
 
 
 def read_signals(redis: Any, start: datetime, end: datetime) -> list[Signal]:
-    """Signals published in `[start, end]`, sorted by `(ts, id)` as replay requires.
+    """Signals observed in `[start, end]`, sorted by `(ts, id)` as replay requires.
 
-    Collectors publish out of `ts` order (each polls on its own clock), so the sort is
-    what makes the fixture monotone. A payload that does not validate is skipped and
-    counted, never guessed at.
+    The stream range is by publish time, so a late-published line (Loki can lag by tens of
+    seconds) whose `ts` falls before `start` is dropped: on the live dev-01 r3 recording,
+    error lines from a kill 4 minutes before the window slipped into its baseline that way.
+    Collectors publish out of `ts` order, so the sort is what makes the fixture monotone.
+    A payload that does not validate is skipped and counted, never guessed at.
     """
     signals: list[Signal] = []
     invalid = 0
     for payload in _iter_stream(redis, stream_keys.SIGNALS, _ms(start), _ms(end)):
         try:
-            signals.append(Signal.model_validate_json(payload))
+            signal = Signal.model_validate_json(payload)
         except ValueError:
             invalid += 1
+            continue
+        if start <= signal.ts <= end:
+            signals.append(signal)
     if invalid:
         log.warning("live_record_invalid_signals", count=invalid)
     signals.sort(key=lambda s: (s.ts, s.id))

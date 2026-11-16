@@ -123,6 +123,18 @@ def replay_signals(path: Path) -> list[Signal]:
     return signals
 
 
+def pre_fault_anomalies(signals: Sequence[Signal], onset_ts: datetime) -> int:
+    """Anomalies the default detectors raise on the signals before `onset_ts`.
+
+    A recording's baseline must be quiet: an anomaly before the fault means an earlier fault
+    (another repeat, an aborted run, a test) is inside it, and the run would score an
+    incident the fault did not cause, typically as a false 0 s detection latency. Clean
+    live recordings score 0 here; the runner refuses to score any other.
+    """
+    engine = DetectionEngine.default({})
+    return sum(len(engine.process(s)) for s in signals if s.ts < onset_ts)
+
+
 def load_graph_snapshot(path: Path) -> ServiceGraph:
     """Build a `ServiceGraph` populated from `graph.json`, with cold-start fallbacks.
 
@@ -324,6 +336,7 @@ __all__ = [
     "compute_fault_window",
     "load_graph_snapshot",
     "make_run_id",
+    "pre_fault_anomalies",
     "replay_run",
     "replay_signals",
 ]
