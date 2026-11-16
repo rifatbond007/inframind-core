@@ -17,6 +17,7 @@ from inframind.common.ids import new_ulid
 from inframind.common.signal import Severity, Signal, SignalType, Source
 from inframind.evaluation.config import EvalParams
 from inframind.evaluation.runner.live import (
+    FAULT_MARKER,
     BlockedScenarioError,
     LiveRunner,
     LiveRunnerError,
@@ -292,7 +293,7 @@ def test_run_scenario_reverts_the_fault_when_interrupted(tmp_path: Path) -> None
             _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path / "r0"
         )
     assert kubectl.verbs() == ["apply", "delete"]
-    assert not (tmp_path / "r0").exists()
+    assert sorted(p.name for p in (tmp_path / "r0").iterdir()) == [FAULT_MARKER]  # no fixture
 
 
 def test_run_scenario_applies_and_undoes_a_config_change(tmp_path: Path) -> None:
@@ -383,3 +384,27 @@ def test_back_to_back_repeats_keep_the_previous_fault_out_of_the_baseline(
     assert gap == pytest.approx(600.0)
     baseline_start = second.meta.onset_ts - timedelta(seconds=600)
     assert baseline_start >= first.meta.recorded_at
+
+
+def test_a_fault_from_an_aborted_run_still_delays_the_next_one(tmp_path: Path) -> None:
+    """A recorder killed mid-fault leaves its marker; the next run waits it out."""
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=3000)
+    clock = FakeClock(T0)
+    spec = _spec("dev-podchaos-01-cartservice-pod-kill")
+    fixtures = tmp_path / "fixtures" / spec.scenario_id
+
+    def killed(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    aborted = _runner(redis, clock, FakeKubectl(), tmp_path)
+    aborted._sleep = killed
+    with pytest.raises(KeyboardInterrupt):
+        aborted.run_scenario(spec, repeat=3, record_to=fixtures / "r3")
+    assert (fixtures / "r3" / FAULT_MARKER).exists()
+
+    resumed = _runner(redis, clock, FakeKubectl(), tmp_path)
+    done = resumed.run_scenario(spec, repeat=3, record_to=fixtures / "r3")
+    fault_over = T0 + timedelta(seconds=spec.duration_s + spec.cooldown_s)
+    assert done.meta.onset_ts - timedelta(seconds=600) >= fault_over
+    assert not (fixtures / "r3" / FAULT_MARKER).exists()

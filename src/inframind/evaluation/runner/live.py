@@ -64,6 +64,11 @@ KIND_CONTEXT_PREFIX = "kind-"
 KUBECONFIG_ENV = "KUBECONFIG"
 CHAOS_API_VERSION = "chaos-mesh.org/v1alpha1"
 
+#: Written into a repeat's directory just before its fault is applied and removed once the
+#: fixture is complete, so a recorder killed mid-fault still counts that fault in the next
+#: run's quiet-baseline wait (`latest_recording_end`).
+FAULT_MARKER = "fault-started.json"
+
 #: The bus stores each model as JSON under this field (`common/bus.py`).
 _BUS_FIELD = b"data"
 _XRANGE_PAGE = 5_000
@@ -72,6 +77,7 @@ _XRANGE_PAGE = 5_000
 CommandRunner = Callable[[Sequence[str], str | None], tuple[int, str, str]]
 
 __all__ = [
+    "FAULT_MARKER",
     "KIND_CONTEXT_PREFIX",
     "BlockedScenarioError",
     "LiveRunner",
@@ -249,16 +255,25 @@ def oldest_signal_at(redis: Any) -> datetime | None:
 
 
 def latest_recording_end(fixture_root: Path) -> datetime | None:
-    """The newest `recorded_at` of any live fixture under `fixture_root`, or None."""
-    newest: datetime | None = None
+    """When the newest fault under `fixture_root` was over, or None if there is none.
+
+    A finished fixture counts by its `recorded_at`; an aborted one (its `FAULT_MARKER` is
+    still there) by the marker's `ends_at`, the onset plus the fault duration and cooldown.
+    """
+    ends: list[datetime] = []
     for meta_path in fixture_root.glob("*/r*/meta.json"):
         try:
             recorded = FixtureMeta.from_json(meta_path).recorded_at
         except (OSError, ValueError, KeyError):
             continue
-        if recorded is not None and (newest is None or recorded > newest):
-            newest = recorded
-    return newest
+        if recorded is not None:
+            ends.append(recorded)
+    for marker in fixture_root.glob(f"*/r*/{FAULT_MARKER}"):
+        try:
+            ends.append(datetime.fromisoformat(json.loads(marker.read_text())["ends_at"]))
+        except (OSError, ValueError, KeyError, TypeError):
+            continue
+    return max(ends, default=None)
 
 
 def _ms(ts: datetime) -> int:
@@ -382,6 +397,7 @@ class LiveRunner:
 
         onset = self._now()
         log.info("live_fault_inject", scenario_id=spec.scenario_id, repeat=repeat)
+        self._mark_fault(record_to, onset, spec)
         revert = self._inject(spec, repeat)
         try:
             self._sleep(spec.duration_s)
@@ -474,6 +490,15 @@ class LiveRunner:
         (record_to / "graph.json").write_text(json.dumps(graph.snapshot(), indent=2) + "\n")
         provenance = {**meta.as_dict(), "baseline_s": pre_s, "recorded_live": True}
         (record_to / "meta.json").write_text(json.dumps(provenance, indent=2) + "\n")
+        (record_to / FAULT_MARKER).unlink(missing_ok=True)
+
+    @staticmethod
+    def _mark_fault(record_to: Path, onset: datetime, spec: ScenarioSpec) -> None:
+        """Write `FAULT_MARKER` before injecting (removed by `_write` on success)."""
+        record_to.mkdir(parents=True, exist_ok=True)
+        ends_at = onset + timedelta(seconds=spec.duration_s + spec.cooldown_s)
+        marker = {"onset_ts": onset.isoformat(), "ends_at": ends_at.isoformat()}
+        (record_to / FAULT_MARKER).write_text(json.dumps(marker) + "\n")
 
 
 def list_blocked_reasons(scenarios: Sequence[ScenarioSpec]) -> dict[str, str]:
