@@ -249,8 +249,16 @@ chaos-delete: ## delete the 5 chaos CRs (but keep chaos-mesh installed)
 		delete podchaos,networkchaos,stresschaos --all -n $(CHAOS_TESTING_NS) --ignore-not-found
 
 .PHONY: observe-fault
+OBSERVE_PAUSED = api ingestion-prometheus ingestion-loki ingestion-jaeger
 observe-fault: ## watch the ingestion paths during one chaos fault: make observe-fault [CHAOS_CR=testbed/chaos/<file>.yaml]
-	PY=$(PY) bash testbed/observe_fault.sh $(CHAOS_CR)
+	@# The script runs its own API (on :8080) and its own three collectors at a 10 s interval.
+	@# Pause the compose copies for the run, so the port is free and no signal is collected
+	@# twice, and restart whichever were running afterwards, pass or fail.
+	@running=$$(for s in $(OBSERVE_PAUSED); do [ -n "$$($(COMPOSE) ps -q --status running $$s 2>/dev/null)" ] && echo $$s; done); \
+	if [ -n "$$running" ]; then echo "[observe-fault] pausing compose:" $$running; $(COMPOSE) stop $$running >/dev/null; fi; \
+	PY=$(PY) bash testbed/observe_fault.sh $(CHAOS_CR); rc=$$?; \
+	if [ -n "$$running" ]; then echo "[observe-fault] restarting compose:" $$running; $(COMPOSE) start $$running >/dev/null; fi; \
+	exit $$rc
 
 .PHONY: smoke-detection
 smoke-detection: ## verify the P4 gate live: a burst becomes one incident, baselines freeze, it resolves (~7 min, needs `make up`)
