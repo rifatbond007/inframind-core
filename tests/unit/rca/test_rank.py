@@ -435,3 +435,28 @@ def test_rank_is_unaffected_by_the_real_clock(
         for c in rank_candidates("inc", ["frontend"], anomalies, warm_graph, window=far_future)
     ]
     assert a == b
+
+
+def test_a_pod_replacement_names_the_pods_and_cites_no_baseline() -> None:
+    """An event detector has no baseline (D29); its evidence names the new and old pod."""
+    from inframind.common.anomaly import Anomaly
+    from inframind.rca.evidence import CandidateBundle, build_evidence
+
+    replaced = Anomaly(
+        ts=T0,
+        detector="pod_replaced",
+        service="frontend",
+        signal_id="sig-new-pod",
+        score=5.0,
+        severity=Severity.WARNING,
+        attrs={"pod": "frontend-6f-new", "previous_pods": ["frontend-6f-old"]},
+    )
+    cpu = make_anomaly("frontend", offset_s=10, signal_id="sig-cpu")
+    bundle = CandidateBundle(service="frontend", depth=0, anomalies=[replaced, cpu])
+    evidence = build_evidence(bundle, window=(T0, T0 + timedelta(seconds=60)))
+
+    assert [(e.kind, e.summary) for e in evidence] == [
+        ("metric", "pod_replaced on frontend: new pod frontend-6f-new replaced frontend-6f-old"),
+        ("metric", "zscore fired on frontend (score=3.00)"),
+        ("baseline", "pre-incident baseline for frontend/zscore"),
+    ]

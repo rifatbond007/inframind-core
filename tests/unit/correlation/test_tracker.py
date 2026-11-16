@@ -389,3 +389,14 @@ def test_correlation_disabled_gives_one_incident_per_anomaly() -> None:
     ]
     assert len({i.id for i in published}) == 3
     assert all(i.services in (["a"], ["b"], ["c"]) for i in published)
+
+
+def test_one_sample_that_fires_two_detectors_is_listed_once() -> None:
+    """A CPU sample can trip both Z-score and EWMA; the incident cites that signal once."""
+    tracker, _, _ = make()
+    tracker.on_anomaly(anomaly(0, detector="zscore", signal_id="sig-cpu"))
+    snaps = tracker.on_anomaly(anomaly(0, detector="ewma", signal_id="sig-cpu"))
+    snaps += tracker.on_anomaly(anomaly(5, detector="zscore", signal_id="sig-next"))
+    snaps += tracker.tick(s(400))
+    assert snaps, "the tracker published no snapshot"
+    assert snaps[-1].signals == ["sig-cpu", "sig-next"]

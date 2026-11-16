@@ -57,6 +57,22 @@ class Candidate(BaseModel):
         return service
 
 
+#: Event detectors: they fire on a discrete event and keep no baseline to cite (D29).
+#: Named as strings because `rca` may not import `detection` (module DAG).
+_EVENT_DETECTORS = frozenset({"pod_replaced"})
+
+
+def _anomaly_summary(anomaly: Anomaly) -> str:
+    """One line naming what fired; a pod replacement names the new and the old pod."""
+    if anomaly.detector == "pod_replaced":
+        new = anomaly.attrs.get("pod")
+        old = anomaly.attrs.get("previous_pods") or []
+        if isinstance(new, str) and isinstance(old, list) and old:
+            replaced = ", ".join(str(p) for p in old)
+            return f"pod_replaced on {anomaly.service}: new pod {new} replaced {replaced}"
+    return f"{anomaly.detector} fired on {anomaly.service} (score={anomaly.score:.2f})"
+
+
 @dataclass
 class CandidateBundle:
     """Working state for one candidate during the walk: anomalies + changes in scope."""
@@ -92,11 +108,13 @@ def build_evidence(
         evidence.append(
             Evidence(
                 kind="metric",
-                summary=f"{anomaly.detector} fired on {anomaly.service} (score={anomaly.score:.2f})",
+                summary=_anomaly_summary(anomaly),
                 ref=anomaly.signal_id,
                 weight=max(0.0, float(anomaly.score)),
             )
         )
+        if anomaly.detector in _EVENT_DETECTORS:
+            continue  # no baseline exists for an event; citing one would be invented
         evidence.append(
             Evidence(
                 kind="baseline",

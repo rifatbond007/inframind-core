@@ -114,7 +114,7 @@ class IncidentTracker:
         It never opens an incident and never publishes; the id appears in the next snapshot.
         """
         for record in self._active.values():
-            if signal.service in record.service_set:
+            if signal.service in record.service_set and signal.id not in record.signals:
                 record.signals = [*record.signals, signal.id][-self._max_signals :]
                 record.dirty = True
 
@@ -166,7 +166,8 @@ class IncidentTracker:
         record.service_set.add(anomaly.service)
         record.anomaly_count += 1
         record.anomalies = self._retain([*record.anomalies, anomaly])
-        record.signals = [*record.signals, anomaly.signal_id][-self._max_signals :]
+        if anomaly.signal_id not in record.signals:  # one sample can fire several detectors
+            record.signals = [*record.signals, anomaly.signal_id][-self._max_signals :]
         record.last_anomaly_ts = max(record.last_anomaly_ts, anomaly.ts)
         record.dirty = True
 
