@@ -99,22 +99,29 @@ def test_seed_override_makes_a_run_bit_reproducible() -> None:
 
 def test_every_baseline_produces_a_ranking_for_every_fixture() -> None:
     """All six D7 baselines run over the corpus without raising."""
-    from inframind.evaluation.runner.main import _baseline_input_from_replay
-    from inframind.evaluation.runner.replay import replay_signals
+    from inframind.evaluation.runner.main import _baseline_input_from_trace
+    from inframind.evaluation.runner.replay import replay_trace
 
     params = EvalParams(fixture_dir=str(FIXTURES))
     for spec in _runnable_dev_with_fixtures(params):
-        signals = replay_signals(FIXTURES / spec.scenario_id / "r0" / "signals.ndjson")
-        baseline_input = _baseline_input_from_replay(signals=signals, incidents=[])
+        trace = replay_trace(FIXTURES / spec.scenario_id / "r0", params=params)
         rows = _run_baselines(
             spec=spec,
             seed=spec.seed,
             repeat=0,
-            baseline_input=baseline_input,
-            pagerank_services=["cartservice"],
+            baseline_input=_baseline_input_from_trace(trace),
+            trace=trace,
             summary_text="cartservice looks like the culprit",
         )
         assert len(rows) == 6, f"{spec.scenario_id}: expected 6 baseline rows, got {len(rows)}"
+        no_llm = _run_baselines(
+            spec=spec,
+            seed=spec.seed,
+            repeat=0,
+            baseline_input=_baseline_input_from_trace(trace),
+            trace=trace,
+        )
+        assert "llm_only" not in {r.method for r in no_llm}  # skipped, never a placeholder
         for row in rows:
             assert row.method_kind == "baseline"
             assert row.run_id

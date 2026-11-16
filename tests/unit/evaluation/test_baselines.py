@@ -61,7 +61,7 @@ def test_raw_alertmanager_ranks_by_alert_frequency() -> None:
     """The alert frequency decides the order; no graph, no correlation."""
     ranked = RawAlertmanagerBaseline().rank(_input())
     assert ranked[0] == "cartservice"
-    assert sorted(ranked) == sorted(_input().services)
+    assert set(ranked) <= set(_input().services)
 
 
 def test_raw_alertmanager_is_the_symptom_service() -> None:
@@ -70,7 +70,7 @@ def test_raw_alertmanager_is_the_symptom_service() -> None:
     That is the point of the baseline: it is the "what do we already have" floor.
     """
     ranked = RawAlertmanagerBaseline().rank(_input())
-    assert ranked == ["cartservice", "front-end", "productcatalogservice"]
+    assert ranked == ["cartservice"]  # only the alerting service; the rest are not guessed
 
 
 def test_random_service_is_deterministic_for_a_seed() -> None:

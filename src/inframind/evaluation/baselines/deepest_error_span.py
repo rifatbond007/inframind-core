@@ -21,6 +21,14 @@ class DeepestErrorSpanBaseline:
     def rank(self, input: BaselineInput) -> list[str]:
         """Return services sorted by `trace_depth` desc, then alphabetically."""
         _validate_nonempty(input.services)
+        if input.error_depth_by_service is not None:
+            # Deepest erroring span first; ties go to the service with more error events.
+            depth = input.error_depth_by_service
+            errors = input.error_events_by_service or {}
+            return sorted(
+                (s for s in input.services if s in depth),
+                key=lambda s: (-depth[s], -errors.get(s, 0), s),
+            )
         depths = {
             service: int(input.trace_depth_by_service.get(service, 0)) for service in input.services
         }

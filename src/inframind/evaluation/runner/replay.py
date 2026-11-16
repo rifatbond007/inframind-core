@@ -172,6 +172,87 @@ def load_graph_snapshot(path: Path) -> ServiceGraph:
     return graph
 
 
+@dataclass(frozen=True, slots=True)
+class ReplayTrace:
+    """What detection and correlation produced for one fixture; every ranker reads this.
+
+    InfraMind and the D7 baselines rank from the same trace, over the same incident window
+    and anomalies, so a comparison differs only in the ranking method.
+    """
+
+    signals: list[Signal]
+    graph: ServiceGraph
+    onset_ts: datetime
+    incidents: list[Incident]
+
+    @property
+    def first_open(self) -> datetime:
+        """When the first incident opened. Only valid when `incidents` is non-empty."""
+        return min(i.opened_at for i in self.incidents)
+
+    @property
+    def incident_window(self) -> tuple[datetime, datetime]:
+        """`(first opened_at, last updated_at)`: what the live RCA worker ranks over.
+
+        The ground-truth fault window is the scorer's business, never the ranker's: a
+        ranker that saw it would be told when the fault started.
+        """
+        if not self.incidents:
+            raise ReplayError("no incident: there is no incident window")
+        last = max((i.closed_at or i.updated_at) for i in self.incidents)
+        return (self.first_open, last)
+
+    @property
+    def symptoms(self) -> list[str]:
+        """Every service any incident revision named, sorted."""
+        return sorted({s for i in self.incidents for s in i.services})
+
+    @property
+    def incident_anomalies(self) -> list[Anomaly]:
+        """Each anomaly once (revisions repeat them), in `(ts, id)` order."""
+        unique = {a.id: a for i in self.incidents for a in i.anomalies}
+        return sorted(unique.values(), key=lambda a: (a.ts, a.id))
+
+
+def replay_trace(
+    fixture_dir: Path,
+    *,
+    params: EvalParams,
+    correlation_params: CorrelationParams | None = None,
+) -> ReplayTrace:
+    """Run detection and correlation over one fixture, exactly as the live worker does."""
+    correlation_params = correlation_params or CorrelationParams()
+    signals = replay_signals(signals_file(fixture_dir))
+    graph = load_graph_snapshot(fixture_dir / "graph.json")
+    window_s = float(params.detect_window_s)
+    meta_path = fixture_dir / "meta.json"
+    if meta_path.exists():
+        from ..schema import FixtureMeta
+
+        meta = FixtureMeta.from_json(meta_path)
+        onset_ts = meta.onset_ts
+        window_s = max(window_s, float(meta.window_s))
+    else:
+        onset_ts = _derive_onset(signals)
+
+    # The correlation grouping window defaults to 5 minutes; for an evaluation replay we
+    # tune it from the scenario's window so two anomalies on the same fault always join.
+    tracker = IncidentTracker(
+        (engine := DetectionEngine.default()).coordinator,
+        _tune_correlation(correlation_params, window_s=window_s),
+    )
+    incidents: list[Incident] = []
+    for signal in signals:
+        for anomaly in engine.process(signal):
+            incidents.extend(tracker.on_anomaly(anomaly))
+        # Mirror the worker's handle(): drive the tracker tick per signal.
+        incidents.extend(tracker.tick(signal.ts))
+        # Mirror the "attach_signal" path so Alertmanager signals are seen by the tracker.
+        if signal.source.value == "alertmanager":
+            tracker.attach_signal(signal)
+    return ReplayTrace(signals=signals, graph=graph, onset_ts=onset_ts, incidents=incidents)
+
+
 def compute_fault_window(onset_ts: datetime, duration_s: float) -> tuple[datetime, datetime]:
     """Return `(start, end)` of the fault window, the bracket the scorer compares against."""
     return (onset_ts, _add_seconds(onset_ts, duration_s))
@@ -199,60 +280,23 @@ def replay_run(
     in-process. The bus is never touched.
     """
     rca_params = rca_params or RCAParams()
-    correlation_params = correlation_params or CorrelationParams()
-    signals_path = signals_file(fixture_dir)
-    graph_path = fixture_dir / "graph.json"
-    meta_path = fixture_dir / "meta.json"
-
-    signals = replay_signals(signals_path)
-    graph = load_graph_snapshot(graph_path)
-    window_s = float(params.detect_window_s)
-    if meta_path.exists():
-        from ..schema import FixtureMeta
-
-        meta = FixtureMeta.from_json(meta_path)
-        onset_ts = meta.onset_ts
-        window_s = max(window_s, float(meta.window_s))
-    else:
-        onset_ts = _derive_onset(signals)
-
-    # The correlation grouping window defaults to 5 minutes; for an evaluation replay we
-    # tune it from the scenario's window so two anomalies on the same fault always join.
-    tuned_correlation = _tune_correlation(correlation_params, window_s=window_s)
-    engine = DetectionEngine.default()
-    tracker = IncidentTracker(engine.coordinator, tuned_correlation)
-    anomalies: list[Anomaly] = []
-    incidents: list[Incident] = []
-    for signal in signals:
-        for anomaly in engine.process(signal):
-            anomalies.append(anomaly)
-            snapshots = tracker.on_anomaly(anomaly)
-            incidents.extend(snapshots)
-        # Mirror the worker's handle() — drive the tracker tick per signal.
-        incidents.extend(tracker.tick(signal.ts))
-        # Mirror the "attach_signal" path so Alertmanager signals are seen by the tracker.
-        if signal.source.value == "alertmanager":
-            tracker.attach_signal(signal)
+    trace = replay_trace(fixture_dir, params=params, correlation_params=correlation_params)
+    incidents = trace.incidents
 
     detected = bool(incidents)
     detection_latency_s: float | None = None
     if detected:
-        first_open = min(i.opened_at for i in incidents if i.state == "open")
-        detection_latency_s = max(0.0, (first_open - onset_ts).total_seconds())
+        detection_latency_s = max(0.0, (trace.first_open - trace.onset_ts).total_seconds())
 
     # Score the live detector/ranker for the infra variant. Baselines and ablations plug in
     # via the `scorer` callable so this single entry point produces every row.
     if incidents:
-        symptoms = sorted({s for i in incidents for s in i.services})
-
-        incident_anomalies = [a for i in incidents for a in i.anomalies]
-        window = compute_fault_window(onset_ts, spec.duration_s)
         ranked_candidates = rank_candidates(
             incident_id=run_id,
-            symptoms=symptoms,
-            anomalies=incident_anomalies,
-            graph=graph,
-            window=window,
+            symptoms=trace.symptoms,
+            anomalies=trace.incident_anomalies,
+            graph=trace.graph,
+            window=trace.incident_window,
             params=rca_params,
         )
         ranked_services = tuple(c.service for c in ranked_candidates)
@@ -358,6 +402,7 @@ __all__ = [
     "ReplayError",
     "ReplayInputs",
     "ReplayResult",
+    "ReplayTrace",
     "Scorer",
     "compute_fault_window",
     "has_signals",
@@ -366,6 +411,7 @@ __all__ = [
     "pre_fault_anomalies",
     "replay_run",
     "replay_signals",
+    "replay_trace",
     "signals_file",
     "write_signals_gz",
 ]

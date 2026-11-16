@@ -18,15 +18,16 @@ fault on the kind testbed and writes `evaluation/fixtures/<scenario>/r<repeat>/`
 from __future__ import annotations
 
 import argparse
-import contextlib
+import re
 import sys
 from collections.abc import Sequence
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
-from inframind.common.incident import Incident
 from inframind.common.logging import configure_logging, get_logger
-from inframind.common.signal import Signal, Source
+from inframind.common.signal import Source
+from inframind.detection.error_spike import is_error_event
 
 from .. import report as report_mod
 from ..baselines import (
@@ -41,7 +42,14 @@ from ..config import EvalParams, eval_set_or_all, load_eval_params
 from ..scenarios import ScenarioError, load_set, runnable
 from ..schema import ResultRow, ScenarioSpec
 from ..scoring import default_scorer
-from .replay import has_signals, make_run_id, replay_run, replay_signals, signals_file
+from .replay import (
+    ReplayTrace,
+    has_signals,
+    make_run_id,
+    replay_run,
+    replay_trace,
+    signals_file,
+)
 
 log = get_logger(__name__)
 
@@ -96,56 +104,99 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return build_parser().parse_args(argv)
 
 
-def _baseline_input_from_replay(
-    *, signals: Sequence[Signal], incidents: Sequence[Incident]
-) -> BaselineInput:
-    """Assemble the `BaselineInput` a baseline sees.
+#: `hipstershop.CartService/GetCart` -> `CartService`: a client span names the gRPC service
+#: it called. Online Boutique's service names are those, lower-cased.
+_GRPC_CALLEE = re.compile(r"(?:^|\.)(\w+Service)/")
 
-    Baseline access is deliberately narrower than the InfraMind path: services in play,
-    per-service signal payloads, per-service anomaly severity, and trace depth. The
-    `pagerank` baseline is the one exception — it is wired by the runner with the real
-    `Anomaly` objects, because it is a re-export of the P5 ranker rather than a heuristic.
+
+def _callee_of(operation: object, services: frozenset[str]) -> str | None:
+    """The service a client span's gRPC `operation` called, if it is one we know."""
+    if not isinstance(operation, str):
+        return None
+    match = _GRPC_CALLEE.search(operation)
+    callee = match.group(1).lower() if match else None
+    return callee if callee in services else None
+
+
+def _graph_depths(trace: ReplayTrace) -> dict[str, int]:
+    """Hops from the nearest root (a service nobody calls) in the recorded call graph."""
+    graph = trace.graph
+    nodes = set(graph.services())
+    frontier = [s for s in sorted(nodes) if not graph.predecessors(s)]
+    depth = {s: 0 for s in frontier}
+    while frontier:
+        nxt: list[str] = []
+        for service in frontier:
+            for callee in graph.successors(service):
+                if callee not in depth:
+                    depth[callee] = depth[service] + 1
+                    nxt.append(callee)
+        frontier = nxt
+    return depth
+
+
+def _baseline_window(trace: ReplayTrace) -> tuple[datetime, datetime]:
+    """The incident window when one opened, else the whole recording (never the oracle onset)."""
+    if trace.incidents:
+        return trace.incident_window
+    return (trace.signals[0].ts, trace.signals[-1].ts)
+
+
+def _baseline_input_from_trace(trace: ReplayTrace) -> BaselineInput:
+    """Assemble what the D7 baselines may see from the same replay InfraMind ranked.
+
+    Services in play are the application's (any non-alert signal); evidence is counted
+    inside the incident window only: error events per service, the depth of the deepest
+    erroring span pointing at each service (a failing client span points at its callee),
+    and the services Alertmanager alerted on.
     """
-    services: set[str] = set()
-    signals_by_service: dict[str, list[dict[str, Any]]] = {}
-    trace_depth: dict[str, int] = {}
+    services = frozenset(s.service for s in trace.signals if s.source is not Source.ALERTMANAGER)
+    start, end = _baseline_window(trace)
+    in_window = [s for s in trace.signals if start <= s.ts <= end]
+    depths = _graph_depths(trace)
+
+    errors: dict[str, int] = {}
+    error_depth: dict[str, int] = {}
     alerts_by_service: dict[str, list[dict[str, Any]]] = {}
-
-    for signal in signals:
-        services.add(signal.service)
-        signals_by_service.setdefault(signal.service, []).append(
-            {"attrs": signal.attrs, "source": signal.source.value, "type": signal.type.value}
-        )
+    for signal in in_window:
         if signal.source is Source.ALERTMANAGER:
-            alerts_by_service.setdefault(signal.service, []).append(
-                {"instance": signal.service, "service": signal.service}
-            )
-        depth = signal.attrs.get("trace_depth")
-        if depth is not None:
-            with contextlib.suppress(TypeError, ValueError):
-                trace_depth[signal.service] = max(trace_depth.get(signal.service, 0), int(depth))
+            if signal.service in services:
+                alerts_by_service.setdefault(signal.service, []).append({"service": signal.service})
+            continue
+        if not is_error_event(signal):
+            continue
+        errors[signal.service] = errors.get(signal.service, 0) + 1
+        if signal.source is not Source.JAEGER:
+            continue
+        own = depths.get(signal.service, 0)
+        target, level = signal.service, own
+        callee = (
+            _callee_of(signal.attrs.get("operation"), services)
+            if signal.attrs.get("kind") == "client"
+            else None
+        )
+        if callee is not None:
+            target, level = callee, max(depths.get(callee, 0), own + 1)
+        error_depth[target] = max(error_depth.get(target, 0), level)
 
-    for incident in incidents:
-        services.update(incident.services)
-
-    ordered = tuple(sorted(services))
     return BaselineInput(
-        services=ordered,
-        signals_by_service=signals_by_service,
-        trace_depth_by_service=trace_depth,
+        services=tuple(sorted(services)),
         alerts_by_service=alerts_by_service,
+        error_events_by_service=errors,
+        error_depth_by_service=error_depth,
     )
 
 
-def _heuristic_baselines() -> tuple[object, ...]:
+def _heuristic_baselines(run_seed: int) -> tuple[object, ...]:
     """Return the four baselines that only need a `BaselineInput`.
 
     `pagerank` and `llm_only` are constructed separately: PageRank needs the full anomaly
-    list, and `llm_only` needs the summary text.
+    list, and `llm_only` needs the summary text. `run_seed` differs per repeat, so the
+    random baseline draws a fresh order each run instead of one order for all five.
     """
     return (
         RawAlertmanagerBaseline(),
-        RandomServiceBaseline(),
+        RandomServiceBaseline(seed=run_seed),
         HighestErrorServiceBaseline(),
         DeepestErrorSpanBaseline(),
     )
@@ -157,68 +208,60 @@ def _run_baselines(
     seed: int,
     repeat: int,
     baseline_input: BaselineInput,
-    pagerank_services: Sequence[str] | None = None,
+    trace: ReplayTrace | None = None,
     summary_text: str = "",
 ) -> list[ResultRow]:
-    """Run the six D7 baselines over one replay. Returns one row per baseline."""
-    from ..baselines import PAGERANK_METHOD
+    """Run the D7 baselines over one replay. Returns one row per baseline that ran.
 
-    rows: list[ResultRow] = []
-    for baseline in _heuristic_baselines():
-        ranked = baseline.rank(baseline_input)  # type: ignore[attr-defined]
+    PageRank runs the P5 `rank_pagerank` on the trace's incident (same symptoms, anomalies,
+    graph and window InfraMind ranked); with no incident it ranks nothing. `llm_only` needs
+    an LLM answer recorded for this run; without one it is skipped and logged, never scored
+    from a placeholder.
+    """
+    from ..baselines import PAGERANK_METHOD, rank_from_pagerank
+
+    def row(method: str, ranked: Sequence[str]) -> ResultRow:
+        return default_scorer(
+            spec,
+            seed,
+            repeat,
+            method=method,
+            method_kind="baseline",
+            run_id=make_run_id(spec=spec, seed=seed, repeat=repeat, method=method),
+            detected=bool(ranked),
+            ranked=list(ranked),
+            detection_latency_s=None,
+            false_positive=False,
+            blocked=False,
+        )
+
+    rows = [
+        row(baseline.name, baseline.rank(baseline_input))  # type: ignore[attr-defined]
+        for baseline in _heuristic_baselines(seed * 1000 + repeat)
+    ]
+
+    pagerank_ranked: list[str] = []
+    if trace is not None and trace.incidents:
+        pagerank_ranked = rank_from_pagerank(
+            symptoms=trace.symptoms,
+            anomalies=trace.incident_anomalies,
+            graph=trace.graph,
+            window=trace.incident_window,
+        )
+    rows.append(row(PAGERANK_METHOD, pagerank_ranked))
+
+    if summary_text:
         rows.append(
-            default_scorer(
-                spec,
-                seed,
-                repeat,
-                method=baseline.name,  # type: ignore[attr-defined]
-                method_kind="baseline",
-                run_id=make_run_id(spec=spec, seed=seed, repeat=repeat, method=baseline.name),  # type: ignore[attr-defined]
-                detected=bool(ranked),
-                ranked=ranked,
-                detection_latency_s=None,
-                false_positive=False,
-                blocked=False,
-            )
+            row("llm_only", LLmOnlyBaseline().rank(baseline_input, summary_text=summary_text))
         )
-
-    # PageRank re-exports the P5 ranker. The runner passes the ranked services the real
-    # `rank_pagerank` produced (from `_run_one`); with no anomalies to work from it falls
-    # back to alphabetical order, which `report.py` marks via the `notes` field.
-    pagerank_ranked = (
-        list(pagerank_services) if pagerank_services else sorted(baseline_input.services)
-    )
-    rows.append(
-        default_scorer(
-            spec,
-            seed,
-            repeat,
-            method=PAGERANK_METHOD,
-            method_kind="baseline",
-            run_id=make_run_id(spec=spec, seed=seed, repeat=repeat, method=PAGERANK_METHOD),
-            detected=bool(pagerank_ranked),
-            ranked=pagerank_ranked,
-            detection_latency_s=None,
-            false_positive=False,
-            blocked=False,
+    else:
+        log.info(
+            "baseline_not_run",
+            baseline="llm_only",
+            scenario_id=spec.scenario_id,
+            repeat=repeat,
+            reason="no LLM answer recorded for this run",
         )
-    )
-
-    rows.append(
-        default_scorer(
-            spec,
-            seed,
-            repeat,
-            method="llm_only",
-            method_kind="baseline",
-            run_id=make_run_id(spec=spec, seed=seed, repeat=repeat, method="llm_only"),
-            detected=bool(baseline_input.services),
-            ranked=LLmOnlyBaseline().rank(baseline_input, summary_text=summary_text),
-            detection_latency_s=None,
-            false_positive=False,
-            blocked=False,
-        )
-    )
     return rows
 
 
@@ -231,7 +274,7 @@ def _dirty_baseline(spec: ScenarioSpec, fixture_dir: Path, repeat: int) -> bool:
     import json
 
     from ..schema import FixtureMeta
-    from .replay import pre_fault_anomalies, signals_file
+    from .replay import pre_fault_anomalies, replay_signals
 
     meta_path = fixture_dir / "meta.json"
     if not meta_path.exists() or not json.loads(meta_path.read_text()).get("recorded_live"):
@@ -288,25 +331,17 @@ def _run_one(
     )
     rows = [infra_row]
 
-    if run_baselines or run_ablations:
-        from .replay import replay_signals
-
-        signals = replay_signals(signals_file(fixture_dir))
-        baseline_input = _baseline_input_from_replay(signals=signals, incidents=[])
-        if run_baselines:
-            infra_predicted = (
-                infra_row.predicted_root_cause.split("|") if infra_row.predicted_root_cause else []
+    if run_baselines:
+        trace = replay_trace(fixture_dir, params=params)
+        rows.extend(
+            _run_baselines(
+                spec=spec,
+                seed=seed,
+                repeat=repeat,
+                baseline_input=_baseline_input_from_trace(trace),
+                trace=trace,
             )
-            rows.extend(
-                _run_baselines(
-                    spec=spec,
-                    seed=seed,
-                    repeat=repeat,
-                    baseline_input=baseline_input,
-                    pagerank_services=infra_predicted or None,
-                    summary_text="",
-                )
-            )
+        )
 
     return rows
 

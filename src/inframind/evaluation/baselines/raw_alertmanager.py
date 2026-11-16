@@ -30,8 +30,11 @@ class RawAlertmanagerBaseline:
                 candidate = str(alert.get("instance") or alert.get("service") or service)
                 if candidate:
                     counts[candidate] += 1
-        ordered = sorted(input.services, key=lambda s: (-counts.get(s, 0), s))
-        return ordered
+        # Only services that alerted are ranked: with no alert, Alertmanager said nothing,
+        # and an alphabetical fallback would credit it with a guess it never made.
+        return sorted(
+            (s for s in input.services if counts.get(s, 0) > 0), key=lambda s: (-counts[s], s)
+        )
 
 
 __all__ = ["RawAlertmanagerBaseline"]

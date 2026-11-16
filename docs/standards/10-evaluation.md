@@ -212,19 +212,23 @@ a scored row.
 
 | # | Baseline | What it does | Why it is in the set |
 |---|---|---|---|
-| 1 | `raw_alertmanager` | Fires on the raw alert's `instance` label — no graph, no correlation. | The "what do we already have" floor. |
-| 2 | `random_service` | Uniform pick from the service set, seeded. | The chance floor. Proves top-1 > chance. |
-| 3 | `highest_error_service` | Highest error *rate* from metrics. | The obvious heuristic an SRE writes first. |
-| 4 | `deepest_error_span` | Deepest erroring span in the trace graph. | The trace-only heuristic; RCA's closest competitor. |
-| 5 | `pagerank` | **Re-export** of the P5 `rca.pagerank` implementation. | Proves the graph term earns its keep. |
-| 6 | `llm_only` | `llm.explain()` output parsed for a service name. | D1's control: the LLM alone must score near chance. If it scores high, that is a finding about the evaluation, not a reason to change the code. |
+| 1 | `raw_alertmanager` | Ranks the application services Alertmanager alerted on in the incident window, most alerts first. No alert: it ranks nothing (a miss). | The "what do we already have" floor. |
+| 2 | `random_service` | A seeded random order of the service set; the seed is per run (`seed*1000 + repeat`). | The chance floor. Proves top-1 > chance. |
+| 3 | `highest_error_service` | Ranks services by error events (Loki problem lines + Jaeger error spans) in the incident window; services with none are not ranked. | The obvious heuristic an SRE writes first. |
+| 4 | `deepest_error_span` | Follows each erroring Jaeger span to its target (a failing client span points at the gRPC service it called, e.g. `hipstershop.CartService/GetCart` -> `cartservice`) and ranks by call-graph depth, then error count. | The trace-only heuristic; RCA's closest competitor. |
+| 5 | `pagerank` | Runs the P5 `rank_pagerank` on the replayed incident: same symptoms, anomalies, graph and window InfraMind ranked. No incident: ranks nothing. | Proves the graph term earns its keep. |
+| 6 | `llm_only` | The LLM names a root cause from evidence alone. **Not run yet:** replay calls no LLM, so the row is skipped and logged (`baseline_not_run`) until LLM answers are recorded per run. | D1's control: the LLM alone must score near chance. If it scores high, that is a finding about the evaluation, not a reason to change the code. |
+
+Every baseline ranks from the same `ReplayTrace` as InfraMind (`replay.replay_trace`): the
+same detected incident, its window (`first opened_at` to last update, never the ground-truth
+fault window) and its anomalies, each counted once. Evidence-based baselines never append an
+alphabetical tail of services they have no evidence for: an earlier version fell back to
+alphabetical order, so four baselines all answered `adservice` and scored a free top-3 when
+the root cause sorted second. With no incident, baselines read the whole recording.
 
 `BASELINE_NAMES` is the locked tuple. `Baseline` is a `Protocol` with one method:
 `rank(baseline_input, summary_text='') -> list[str]`. `BaselineInput` is frozen; an empty
-service set raises `EmptyServiceSet`, never an empty ranking.
-
-`llm_only` importing `llm` is allowed by the DAG. It needs no fixtures beyond the signal
-stream — its only input is the LLM summary text plus the `BaselineInput`.
+service set raises `EmptyServiceSet`.
 
 ## 10.6 Ablations
 
