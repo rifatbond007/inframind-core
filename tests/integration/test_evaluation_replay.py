@@ -200,5 +200,6 @@ def test_blocked_scenarios_all_need_the_chaos_daemon() -> None:
         s.chaos.kind in ("StressChaos", "NetworkChaos") or s.chaos.action == "container-kill"
         for s in all_blocked
     )
-    assert not any(s.chaos.action == "container-kill" for s in runnable(load_set("dev")))
+    # dev-02 container-kill runs since D2-Chaos-runtime (containerd runtime, verified live).
+    assert any(s.chaos.action == "container-kill" for s in runnable(load_set("dev")))
     assert all(s.block_reason == "d2_chaos_runtime_docker" for s in all_blocked)

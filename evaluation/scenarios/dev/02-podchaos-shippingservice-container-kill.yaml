@@ -1,10 +1,7 @@
-# block_status: d2_chaos_runtime_docker
-#
-# BLOCKED (2026-11-16): container-kill runs through the Chaos Mesh daemon, like StressChaos and
-# NetworkChaos, and this kind runtime refuses it: every live dev-02 repeat reported
-# `Failed to apply chaos: expected docker:// but got containerd://` and recorded no fault.
-# pod-kill and pod-failure go through the Kubernetes API and work (verified the same day).
-#
+# Unblocked 2026-11-16 by D2-Chaos-runtime: chaos-daemon now runs with the containerd runtime.
+# A live probe reached AllInjected=True and shippingservice's restart count went 1 -> 2. The
+# first five recordings (runtime refused, no fault) are kept in
+# evaluation/fixtures/no-fault-dev-02-container-kill-refused/ and never scored.
 # Dev split scenario 02 — PodChaos container-kill on shippingservice.
 # Chaos Mesh PodChaos has no `container-exit` action; `container-kill` with the `server`
 # container named is the supported equivalent (same shape as testbed/chaos/oom-kill.yaml).
@@ -37,5 +34,4 @@ metrics_to_assert:
   - container_restarts_total
   - span_latency
 repeats: 5
-status: blocked
-block_reason: d2_chaos_runtime_docker
+status: runnable

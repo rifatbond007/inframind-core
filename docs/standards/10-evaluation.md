@@ -151,7 +151,7 @@ you meant to run that never loaded is worse than a crash.
 | Scenario | Fault | Chaos | Status |
 |---|---|---|---|
 | dev-01 | pod-kill, cartservice | PodChaos | runnable |
-| dev-02 | container-kill, shippingservice | PodChaos | blocked — D2-Chaos-runtime (daemon) |
+| dev-02 | container-kill, shippingservice | PodChaos | runnable (containerd runtime, verified live) |
 | dev-03 | pod-kill, productcatalogservice | PodChaos | runnable |
 | dev-04 | cpu-stress, cartservice | StressChaos | blocked — D2-Chaos-runtime |
 | dev-05 | memory-stress, paymentservice | StressChaos | blocked — D2-Chaos-runtime |
@@ -172,10 +172,11 @@ you meant to run that never loaded is worse than a crash.
 | test-09 | pod-failure, productcatalogservice | PodChaos | runnable |
 
 No `(fault_type, target_service)` pair appears in both splits
-(`test_no_fault_appears_in_both_splits`). **12 of the 20 are runnable** (6 dev + 6 test), meeting
-D6: D26 blocks the six Stress/NetworkChaos scenarios and both `container-kill` scenarios (the
-Chaos Mesh daemon path, refused live on 2026-11-16); dev-11 (a bad frontend rollout, the live
-D30 caller-bug check) and test-09 (`pod-failure` on productcatalogservice) replace them.
+(`test_no_fault_appears_in_both_splits`). **13 of the 20 are runnable** (7 dev + 6 test). Since
+D2-Chaos-runtime (containerd runtime, 2026-11-16) `container-kill` injects (verified live) and
+dev-02 is runnable again; test-02 and the six Stress/NetworkChaos scenarios stay blocked until
+each is probed live. dev-11 (a bad frontend rollout, the live D30 caller-bug check) and test-09
+(`pod-failure` on productcatalogservice) were added while container-kill was refused.
 
 The blocked files carry `# block_status: d2_chaos_runtime_docker` and
 `status: blocked`. The runner **refuses** them by default (exit code 3, message in

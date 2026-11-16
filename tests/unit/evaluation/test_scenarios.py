@@ -134,12 +134,12 @@ def test_load_dev_and_test_sets_are_disjoint(repo_paths: tuple[Path, Path]) -> N
 
 
 def test_dev_set_is_eleven_scenarios(repo_paths: tuple[Path, Path]) -> None:
-    """Dev: 6 runnable (pod-kill, pod-failure, config) + 5 blocked on D2-Chaos-runtime."""
+    """Dev: 7 runnable (pod-kill, container-kill, pod-failure, config) + 4 blocked."""
     _scenarios_root, _fixtures = repo_paths
     dev = load_set("dev")
     assert len(dev) == 11, f"expected 11 dev scenarios, got {len(dev)}"
-    assert len(runnable(dev)) == 6, "expected 6 runnable dev scenarios"
-    assert len(blocked(dev)) == 5, "expected 5 blocked dev scenarios"
+    assert len(runnable(dev)) == 7, "expected 7 runnable dev scenarios"
+    assert len(blocked(dev)) == 4, "expected 4 blocked dev scenarios"
 
 
 def test_test_set_is_nine_scenarios(repo_paths: tuple[Path, Path]) -> None:
@@ -167,8 +167,9 @@ def test_blocked_scenarios_all_carry_d2_chaos_runtime_docker(repo_paths: tuple[P
     blocked_test = blocked(load_set("test"))
     all_blocked = blocked_dev + blocked_test
     assert all(s.block_reason == BLOCKED_REASON for s in all_blocked)
-    # 6 Stress/NetworkChaos + 2 container-kill (refused by the runtime live, 2026-11-16).
-    assert len(all_blocked) == 8
+    # 6 Stress/NetworkChaos (unverified on containerd) + test-02 container-kill (status kept
+    # until unblocked on purpose; dev-02 was unblocked after a live probe, 2026-11-16).
+    assert len(all_blocked) == 7
 
 
 def test_assert_disjoint_raises_on_overlap() -> None:
