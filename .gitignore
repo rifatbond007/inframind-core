@@ -97,3 +97,6 @@ paper/build/
 /PUKU.md
 /AGENTS.md
 /CLAUDE.local.md
+
+# Runtime state of host-run workers (RCA graph snapshot: RCA_GRAPH_PATH default).
+data/
