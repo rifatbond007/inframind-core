@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import hashlib
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 
 from inframind.common.anomaly import Anomaly
@@ -102,14 +102,18 @@ def rank_candidates(
 
     grouped_anomalies = anomalies_by_service(anomalies)
     grouped_changes = changes_by_service(change_events)
+    observed = observed_call_edges(anomalies)
 
-    # Deduplicate candidates reached from more than one symptom, keeping the shallowest depth.
+    # A candidate reached from several symptoms keeps its DEEPEST depth (D30): failures
+    # travel callee -> caller (D2), so a service below another anomalous service explains
+    # it, even when it is anomalous itself. Keeping the shallowest made every symptom depth
+    # 0, and a killed callee tied with the caller it broke.
     depths: dict[str, int] = {}
     paths: dict[str, tuple[str, ...]] = {}
     for symptom in symptoms:
-        for reached in walk_toward_callees(graph, symptom, params=params):
+        for reached in walk_toward_callees(graph, symptom, params=params, extra_edges=observed):
             existing = depths.get(reached.service)
-            if existing is None or reached.depth < existing:
+            if existing is None or reached.depth > existing:
                 depths[reached.service] = reached.depth
                 paths[reached.service] = reached.path
 
@@ -126,7 +130,7 @@ def rank_candidates(
 
         # Downweight by graph confidence so a cold-start (zero-confidence) topology cannot
         # dominate the ranking on structure alone (standard 13.2).
-        confidence = _graph_confidence(graph, paths[service])
+        confidence = _graph_confidence(graph, paths[service], observed)
 
         raw_score = (
             params.w_anomaly_severity * severity_term
@@ -162,13 +166,41 @@ def rank_candidates(
     return scored[:limit]
 
 
-def _graph_confidence(graph: ServiceGraph, path: Sequence[str]) -> float:
-    """Mean edge confidence along `path`; 1.0 for the single-node (symptom) path."""
+def _graph_confidence(
+    graph: ServiceGraph,
+    path: Sequence[str],
+    observed: Mapping[str, frozenset[str]] | None = None,
+) -> float:
+    """Mean edge confidence along `path`; 1.0 for the single-node (symptom) path.
+
+    An edge the incident observed failing (`observed`) counts as fully confident: the
+    `call_error` detector fires only after `min_count` failed calls on it.
+    """
     if len(path) < 2:
         return 1.0
+    seen = observed or {}
     pairs = [(path[i], path[i + 1]) for i in range(len(path) - 1)]
-    total = sum(graph.edge_confidence(caller, callee) for caller, callee in pairs)
+    total = sum(
+        1.0 if callee in seen.get(caller, frozenset()) else graph.edge_confidence(caller, callee)
+        for caller, callee in pairs
+    )
     return total / (len(path) - 1)
+
+
+#: The detector whose anomalies carry an observed failing call (`attrs.caller`). Named as a
+#: string because `rca` may not import `detection` (module DAG).
+CALL_ERROR_DETECTOR = "call_error"
+
+
+def observed_call_edges(anomalies: Sequence[Anomaly]) -> dict[str, frozenset[str]]:
+    """`caller -> callees` for every failing call an anomaly reports (D30)."""
+    edges: dict[str, set[str]] = {}
+    for anomaly in anomalies:
+        caller = anomaly.attrs.get("caller")
+        is_call = anomaly.detector == CALL_ERROR_DETECTOR and isinstance(caller, str)
+        if is_call and caller and caller != anomaly.service:
+            edges.setdefault(str(caller), set()).add(anomaly.service)
+    return {caller: frozenset(callees) for caller, callees in edges.items()}
 
 
 __all__ = [
@@ -176,5 +208,6 @@ __all__ = [
     "RCAParams",
     "WalkCandidate",
     "anomaly_severity",
+    "observed_call_edges",
     "rank_candidates",
 ]

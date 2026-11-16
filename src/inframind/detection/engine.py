@@ -15,6 +15,7 @@ from inframind.common.signal import Signal
 from inframind.metrics import record_anomaly as metrics_record_anomaly
 
 from .base import Detector
+from .call_error import CallErrorDetector
 from .config import (
     ErrorSpikeParams,
     EwmaParams,
@@ -33,7 +34,7 @@ from .zscore import ZScoreDetector
 
 
 class DetectionEngine:
-    """The five detectors plus the coordinator that freezes their baselines."""
+    """The six detectors plus the coordinator that freezes their baselines."""
 
     def __init__(
         self, detectors: Sequence[Detector], coordinator: BaselineFreezeCoordinator
@@ -50,6 +51,7 @@ class DetectionEngine:
             ErrorSpikeDetector(load_params(ErrorSpikeParams, "error_spike", env)),
             LatencyRegressionDetector(load_params(LatencyParams, "latency_regression", env)),
             PodReplacementDetector(load_params(PodReplacementParams, "pod_replaced", env)),
+            CallErrorDetector(load_params(ErrorSpikeParams, "call_error", env)),
         ]
         return cls(detectors, BaselineFreezeCoordinator(detectors, freeze_window_s(env)))
 

@@ -62,7 +62,7 @@ score(s) = w1 * anomaly_severity
 |---|---|---|
 | `anomaly_severity` | Sum of z-scores (or detector equivalent) for `s` in the incident window. | [0, +inf) |
 | `earliest_onset` | 1 / (time since the first `Anomaly` on `s`). Earlier onset = higher score. | (0, 1] |
-| `downstream_depth` | The shortest distance from `s` to the symptom service in the graph. Closer = higher score. | [0, `max_depth`] |
+| `downstream_depth` | How far below a symptom `s` sits along `caller -> callee` edges, normalised by `max_depth`. **Deeper = higher** (a callee that is also anomalous is more likely the origin, D2). A candidate reached from several symptoms keeps its **deepest** reach (D30), so an anomalous callee of another symptom is not flattened to depth 0. Edges the incident observed failing (`call_error` anomalies' `caller`, D30) are walkable for that incident with full confidence. | [0, 1] |
 | `change_correlation` | 1.0 if a rollout / ConfigMap / Secret change to `s` happened in the window, else 0. | {0, 1} |
 
 The four `w` weights sum to 1; tune on the dev split.

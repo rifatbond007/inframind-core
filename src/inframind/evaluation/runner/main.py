@@ -18,7 +18,6 @@ fault on the kind testbed and writes `evaluation/fixtures/<scenario>/r<repeat>/`
 from __future__ import annotations
 
 import argparse
-import re
 import sys
 from collections.abc import Sequence
 from datetime import datetime
@@ -27,6 +26,7 @@ from typing import Any
 
 from inframind.common.logging import configure_logging, get_logger
 from inframind.common.signal import Source
+from inframind.detection.call_error import grpc_callee
 from inframind.detection.error_spike import is_error_event
 
 from .. import report as report_mod
@@ -104,17 +104,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return build_parser().parse_args(argv)
 
 
-#: `hipstershop.CartService/GetCart` -> `CartService`: a client span names the gRPC service
-#: it called. Online Boutique's service names are those, lower-cased.
-_GRPC_CALLEE = re.compile(r"(?:^|\.)(\w+Service)/")
-
-
 def _callee_of(operation: object, services: frozenset[str]) -> str | None:
-    """The service a client span's gRPC `operation` called, if it is one we know."""
-    if not isinstance(operation, str):
-        return None
-    match = _GRPC_CALLEE.search(operation)
-    callee = match.group(1).lower() if match else None
+    """The service a client span's gRPC `operation` called, if it is one we know.
+
+    Same parser the `call_error` detector uses (`detection.call_error.grpc_callee`).
+    """
+    callee = grpc_callee(operation)
     return callee if callee in services else None
 
 

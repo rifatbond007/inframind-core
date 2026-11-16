@@ -460,3 +460,36 @@ def test_a_pod_replacement_names_the_pods_and_cites_no_baseline() -> None:
         ("metric", "zscore fired on frontend (score=3.00)"),
         ("baseline", "pre-incident baseline for frontend/zscore"),
     ]
+
+
+def test_an_observed_failing_call_ranks_the_callee_above_its_caller() -> None:
+    """The dev-01 shape (D30): cartservice has no traces, so the graph has no
+    frontend -> cartservice edge; frontend floods errors and cartservice gets call errors.
+    Equal severity and onset tied, and the tie-break picked frontend, the symptom."""
+    from inframind.common.anomaly import Anomaly
+    from inframind.rca.rank import observed_call_edges
+
+    graph = ServiceGraph(seed_path=None)  # cold: no edge at all between the two
+    frontend = [make_anomaly("frontend", detector="error_spike", score=9.0, offset_s=1)]
+    cart = [
+        Anomaly(
+            ts=T0 + timedelta(seconds=3),
+            detector="call_error",
+            service="cartservice",
+            signal_id="sig-call",
+            score=9.0,
+            severity=Severity.CRITICAL,
+            attrs={"caller": "frontend"},
+        )
+    ]
+    assert observed_call_edges(cart) == {"frontend": frozenset({"cartservice"})}
+    window = (T0, T0 + timedelta(seconds=120))
+    ranked = rank_candidates(
+        "inc", ["frontend", "cartservice"], frontend + cart, graph, window=window
+    )
+    assert [c.service for c in ranked][:2] == ["cartservice", "frontend"]
+    assert ranked[0].depth == 1  # the deepest reach (from frontend), not 0 as a symptom
+    assert ranked[0].confidence == 1.0
+
+    without = rank_candidates("inc", ["frontend", "cartservice"], frontend, graph, window=window)
+    assert "cartservice" not in [c.service for c in without][:1]

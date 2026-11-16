@@ -96,7 +96,7 @@ def update(self, signal: Signal) -> Anomaly | None:
 below `threshold` (or for a downward move on an `"up"` metric) and otherwise an `Anomaly` whose
 `attrs` carry `metric`, `value`, `mean`, `std`, `window`, `threshold` and `frozen`.
 
-## 5.5 The five detectors and their defaults
+## 5.5 The six detectors and their defaults
 
 | Detector | Signal | Algorithm | Defaults (`INFRAMIND_DETECTION_<NAME>_<PARAM>`) |
 |---|---|---|---|
@@ -104,6 +104,7 @@ below `threshold` (or for a downward move on an `"up"` metric) and otherwise an 
 | `ewma` | Prometheus metric | exponentially weighted mean and variance | `alpha=0.3`, `sigma_k=3.0`, `min_samples=10` |
 | `error_spike` | Loki warning/error lines, Jaeger error spans | event count in a sliding window against a rolling baseline | `window_s=300`, `min_count=3`, `k=3.0`, `baseline_windows=12` |
 | `latency_regression` | Jaeger `span_latency` polls | p95 against the rolling median, breach must persist | `regression_pct=50`, `min_delta_ms=10`, `min_spans=10`, `consecutive=2`, `window=60` |
+| `call_error` (D30) | Jaeger **client** error spans, keyed by the gRPC callee in `operation` (`pkg.FooService/M` -> `fooservice`), only for a service already seen | the `error_spike` count spike, per callee; each anomaly records `caller` | same as `error_spike` (`INFRAMIND_DETECTION_CALL_ERROR_*`) |
 | `pod_replaced` (D29) | any Prometheus metric's `labels.pod` | a new pod for a service watched `warmup_s`, with a predecessor seen within `pod_ttl_s` | `warmup_s=300`, `pod_ttl_s=1800`, `score=5.0` |
 
 - **EWMA vs Z-score.** EWMA has no window edge and follows recent level shifts; with `alpha=0.3`
