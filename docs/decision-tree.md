@@ -364,6 +364,30 @@ incident record contradicted itself. D1 is unchanged: the LLM still only
 describes the ranking it is given. Cost: one extra call per change of the
 top candidate plus one at resolve; no extra alerts.
 
+## D29-PodReplacement. A new pod for an established service is an anomaly
+
+`detection/pod_replacement.py` adds a fifth detector, `pod_replaced`. Per
+service it remembers the pods its Prometheus signals came from
+(`attrs.labels.pod`) and fires once, severity `warning`, when a new pod
+appears for a service watched for at least `warmup_s` (300 s) while another
+pod of that service was seen within `pod_ttl_s` (1800 s). It is an event rule
+on a statistic the collectors already ship, with no training (D3) and no
+baseline to freeze (D4).
+
+**Why:** on the live testbed a frontend pod-kill produced no incident. The
+pod was replaced within seconds; CPU and memory read lower and alert upward
+only, the restart counter belongs to the old pod, and the frontend logged one
+error. Four of the twelve runnable scenarios are pod-kills, so without this
+signal they could only be scored as misses.
+
+**Evidence:** on the recorded quiet-cluster fixture (3516 real samples) it
+reports exactly the three frontend replacements the smoke tests caused and
+nothing else; the CPU/memory detectors still report nothing there.
+
+**Trigger to revisit:** a testbed with more than one replica per Deployment
+(scaling up would then fire), or the evaluation showing it as a false-positive
+source in the soak run.
+
 ## D-Setup. Step 0 only scaffolds the repo
 
 Step 0 (this phase) creates the module skeletons, tooling, CI, and dev compose. No functional
@@ -391,6 +415,7 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 
 - **D28-CompositionRoot** · 2026-11-10 · `src/inframind/main.py` is the composition root: the `rca` process (compose and Helm) runs `python -m inframind.main`, which is the RCA worker plus an injected `on_analysis` hook that stores every ranked incident revision in Postgres, calls the LLM explainer only when an alert is due, dispatches the alert, and stores the summary, the alert rows and their audit rows. Alerting moves from the api process (where its router was never dispatched) to the rca process, amending D27. The LLM is a hosted OpenAI-compatible API (Groq on the testbed) configured by the `LLM_*` contract names; `INFRAMIND_LLM_OLLAMA_FALLBACK=false` disables the D9 local fallback on hosts that cannot run a model. · Why: no package in the module DAG may import `rca`, `llm`, `alerting` and `storage` together, so the chain standard 06b.4 describes was never wired and live incidents never reached Postgres, the LLM or a sink. A single root module composes them without loosening any package edge; `test_module_dag.py` pins `main` as the only root module that may. · Alternatives: (a) a new `stream:rca-results` key consumed by the api — rejected: a D-change to the pinned streams, contradicts 06b.4, and the api still may not import `llm`. (b) widen the `rca` or `alerting` DAG edges — rejected: it would let the ranker depend on the explainer, the opposite of D1. · Status: approved by the user (Md. Rifat Hossain) 2026-11-10; supervisor review pending. Cross-ref: `docs/standards/06b-storage-and-alerting.md` §06b.4, `docs/standards/07-llm-explainer.md`.
 - **D28-amendment (summary refresh)** · 2026-11-16 · An incident that already has a summary is re-explained, without an alert, when its top-ranked service changes and once on resolve; the audit row records `reason`, `revision`, `primary`. · Why: a live incident stored `primary: frontend` with a summary naming adservice (written at revision 1, never refreshed). · Alternatives: (a) re-explain every revision — rejected, one call per revision for no new information; (b) re-alert on every primary change — rejected, it defeats alert dedup; (c) keep the old summary and only flag it stale — rejected, the API would still show a wrong root cause. · Status: approved by the user (Md. Rifat Hossain) 2026-11-16; supervisor review pending.
+- **D29-PodReplacement** · 2026-11-16 · A fifth detector, `pod_replaced`, fires once when a service watched for 300 s gets a new pod while a predecessor was seen within 30 min. · Why: a live frontend pod-kill produced no incident (CPU/memory alert upward only, the restart counter is the old pod's), and 4 of 12 runnable scenarios are pod-kills. · Alternatives: (a) report pod-kill misses as they are — rejected, the fault is real and visible in the data the collectors already ship; (b) a new collector query on `kube_pod_created` — rejected, the pod label on existing series carries the same fact with no ingestion change; (c) alert on CPU/memory drops — rejected, P4 ruling 13 showed drops are traffic pauses, not faults. · Status: approved by the user (Md. Rifat Hossain) 2026-11-16; supervisor review pending.
 
 - **D22** · 2026-10-11 · `change_correlation` is the pinned algorithm for the RCA `w4` term. Source is a single in-process K8s API watch on `Deployment`, `StatefulSet`, `DaemonSet`, `ConfigMap`, `Secret`, `HorizontalPodAutoscaler` (filtered to `.spec.template`, `.data`, `.spec.replicas` respectively), scoped to `INFRAMIND_WATCH_NAMESPACES`. Captures metadata only — **no Secret values stored**. Correlation uses a 30-minute pre-window (`CHANGE_CORRELATION_PRE_WINDOW_S`) before `incident.opened_at`, with recency-weighted soft saturation, returning a float in `[0, 1]`. The `change_events` Postgres table is append-only (D20). The watcher's `Role` extends the existing read-only `Role` (section 11.5) with `secrets` `get` / `list` / `watch` only — no write verbs, no `pods/exec`. · Why: the `w4` term is named and weighted in section 6.4 but had no algorithm. Without a pinned spec, every implementation invents its own and the D6 reproducibility contract breaks at the `w4` term. The K8s API watch (not the audit log) matches the existing read-only RBAC scope with a minimal extension. · Alternatives: (a) Watch the audit log — rejected for being more privileged than needed. (b) Poll the K8s API on a timer — rejected because polling misses bursts of changes between polls. (c) Use a sidecar — rejected because it adds a new `Deployment` with its own lifecycle for a single consumer. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/14-change-correlation.md`.
 

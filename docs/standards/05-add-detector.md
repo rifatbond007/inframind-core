@@ -96,7 +96,7 @@ def update(self, signal: Signal) -> Anomaly | None:
 below `threshold` (or for a downward move on an `"up"` metric) and otherwise an `Anomaly` whose
 `attrs` carry `metric`, `value`, `mean`, `std`, `window`, `threshold` and `frozen`.
 
-## 5.5 The four detectors and their defaults
+## 5.5 The five detectors and their defaults
 
 | Detector | Signal | Algorithm | Defaults (`INFRAMIND_DETECTION_<NAME>_<PARAM>`) |
 |---|---|---|---|
@@ -104,6 +104,7 @@ below `threshold` (or for a downward move on an `"up"` metric) and otherwise an 
 | `ewma` | Prometheus metric | exponentially weighted mean and variance | `alpha=0.3`, `sigma_k=3.0`, `min_samples=10` |
 | `error_spike` | Loki warning/error lines, Jaeger error spans | event count in a sliding window against a rolling baseline | `window_s=300`, `min_count=3`, `k=3.0`, `baseline_windows=12` |
 | `latency_regression` | Jaeger `span_latency` polls | p95 against the rolling median, breach must persist | `regression_pct=50`, `min_delta_ms=10`, `min_spans=10`, `consecutive=2`, `window=60` |
+| `pod_replaced` (D29) | any Prometheus metric's `labels.pod` | a new pod for a service watched `warmup_s`, with a predecessor seen within `pod_ttl_s` | `warmup_s=300`, `pod_ttl_s=1800`, `score=5.0` |
 
 - **EWMA vs Z-score.** EWMA has no window edge and follows recent level shifts; with `alpha=0.3`
   its memory is about three samples, so it is not a slow-ramp detector (a test says so).
@@ -113,6 +114,12 @@ below `threshold` (or for a downward move on an `"up"` metric) and otherwise an 
 - **Latency persistence.** Real Boutique frontend p95 is bursty (median 16 ms, isolated spikes
   of 75 ms to 5 s). On recorded data a single breaching poll fires on 16% of polls, two in a row
   on 2%. Polls with fewer than `min_spans` spans are noise and are neither scored nor learned.
+- **Pod replacement (D29).** A killed or failed pod is replaced within seconds: CPU/memory read
+  lower (they alert upward only), the restart counter belongs to the old pod, and a stateless
+  service may log nothing. The new pod name is the evidence. On the recorded quiet-cluster
+  fixture it finds exactly the three real frontend pod-kills and nothing else; a collection gap
+  that expires every pod is relearned, not reported. Scaling up also fires (one replica on the
+  testbed, so a new pod means a replacement). Severity is always `warning`.
 - **Severity** is coarse and set by each detector: Z-score/EWMA `critical` at 1.5x the threshold
   (always for a counter), error spike `critical` at twice `min_count`, latency `critical` at 3x
   the median. Correlation refines it.

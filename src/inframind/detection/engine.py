@@ -19,6 +19,7 @@ from .config import (
     ErrorSpikeParams,
     EwmaParams,
     LatencyParams,
+    PodReplacementParams,
     ZScoreParams,
     freeze_window_s,
     load_params,
@@ -27,11 +28,12 @@ from .error_spike import ErrorSpikeDetector
 from .ewma import EwmaDetector
 from .freeze import BaselineFreezeCoordinator
 from .latency_regression import LatencyRegressionDetector
+from .pod_replacement import PodReplacementDetector
 from .zscore import ZScoreDetector
 
 
 class DetectionEngine:
-    """The four detectors plus the coordinator that freezes their baselines."""
+    """The five detectors plus the coordinator that freezes their baselines."""
 
     def __init__(
         self, detectors: Sequence[Detector], coordinator: BaselineFreezeCoordinator
@@ -47,6 +49,7 @@ class DetectionEngine:
             EwmaDetector(load_params(EwmaParams, "ewma", env)),
             ErrorSpikeDetector(load_params(ErrorSpikeParams, "error_spike", env)),
             LatencyRegressionDetector(load_params(LatencyParams, "latency_regression", env)),
+            PodReplacementDetector(load_params(PodReplacementParams, "pod_replaced", env)),
         ]
         return cls(detectors, BaselineFreezeCoordinator(detectors, freeze_window_s(env)))
 
