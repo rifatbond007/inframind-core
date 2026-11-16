@@ -10,7 +10,12 @@ hook that, for every ranked incident revision:
    escalation, or after the dedup window), **explains it** with the LLM
    (`llm.explain`, an OpenAI-compatible API such as Groq; D1 — the LLM only summarises
    the ranking it is given) and stores the summary plus an audit row of the call;
-3. **alerts** through the router's sinks and stores each alert and its sink outcome.
+3. **alerts** through the router's sinks and stores each alert and its sink outcome;
+4. **keeps the stored summary true to the stored ranking** (D28 amendment): once an
+   incident has a summary, it is re-explained, without a new alert, when the top-ranked
+   service changes and once when the incident resolves. Otherwise `summary_text` would
+   keep naming the revision-1 root cause after later revisions re-ranked it. Each audit
+   row records the `revision`, `primary` and `reason` the summary was written for.
 
 Why a root module and not a package: the module DAG (standards 01 §1.3) lets no package
 import `rca`, `llm`, `alerting` and `storage` together, yet standard 06b.4 puts the RCA
@@ -78,20 +83,28 @@ class IncidentPipeline:
         self._llm_params = llm_params
         self._scenario_id = scenario_id
         self._explain = explain_fn
+        # incident id -> top-ranked service the stored summary describes (None: no ranking).
+        self._summarised: dict[str, str | None] = {}
 
     async def __call__(self, incident: Incident, analysis: IncidentAnalysis) -> None:
         """Handle one ranked incident revision. Storage errors propagate (bus redelivery)."""
         candidates = analysis.candidates
         await write_incident(self._pool, incident, candidates, scenario_id=self._scenario_id)
+        primary = candidates[0].service if candidates else None
 
         if incident.state in _CLOSED_STATES:
             self._router.forget(incident.id)
+            if incident.id in self._summarised:
+                await self._summarise(incident, candidates, reason="resolved")
+                self._summarised.pop(incident.id, None)
             log.info("pipeline_incident_closed", incident_id=incident.id, state=incident.state)
             return
         if not self._router.should_dispatch(incident):
+            if incident.id in self._summarised and primary != self._summarised[incident.id]:
+                await self._summarise(incident, candidates, reason="primary_changed")
             return
 
-        summary_text = await self._summarise(incident, candidates)
+        summary_text = await self._summarise(incident, candidates, reason="alert")
         result = await self._router.dispatch(incident, candidates, summary_text=summary_text)
         if result.alerted:
             await record_alerts(
@@ -110,19 +123,28 @@ class IncidentPipeline:
             sinks=[channel for _, channel, _ in result.outcomes],
         )
 
-    async def _summarise(self, incident: Incident, candidates: Sequence[Candidate]) -> str | None:
+    async def _summarise(
+        self, incident: Incident, candidates: Sequence[Candidate], *, reason: str
+    ) -> str | None:
         """Explain the ranking and store the summary; never blocks the alert (D1).
 
         No candidates means nothing to explain (`explain` requires a ranking). Any explainer
         failure degrades to the deterministic template summary, which is still stored and
         audited, so the alert always carries an explanation when there is a ranking.
+        `reason` is `alert`, `primary_changed` or `resolved`; it is audited with the
+        revision and top-ranked service the summary describes.
         """
         if not candidates:
             return None
+        primary = candidates[0].service
+        self._summarised[incident.id] = primary
         provenance: dict[str, Any] = {
             "provider": self._llm_params.provider,
             "model": self._llm_params.openai_model,
             "base_url": self._llm_params.openai_base_url,
+            "reason": reason,
+            "revision": incident.revision,
+            "primary": primary,
         }
         try:
             summary, result = await asyncio.to_thread(
@@ -150,6 +172,9 @@ class IncidentPipeline:
         log.info(
             "pipeline_incident_summarised",
             incident_id=incident.id,
+            revision=incident.revision,
+            primary=primary,
+            reason=reason,
             status=provenance["status"],
             model=provenance["model"],
         )
