@@ -1,0 +1,31 @@
+# Dev split scenario 09 — PodChaos pod-failure on currencyservice.
+# pod-failure keeps the pod object but makes it unavailable for the whole duration.
+# currencyservice is called by frontend (every page renders prices) and checkoutservice,
+# so its failure surfaces as errors in both; no other runnable scenario targets it.
+scenario_id: dev-podchaos-09-currencyservice-pod-failure
+set: dev
+seed: 1009
+fault_type: pod_failure
+target_service: currencyservice
+target_namespace: default
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: currencyservice
+expected_affected_services:
+  - currencyservice
+  - checkoutservice
+  - frontend
+chaos:
+  kind: PodChaos
+  spec:
+    action: pod-failure
+    mode: all
+    selector:
+      label: app
+      value: currencyservice
+metrics_to_assert:
+  - cpu_cores
+  - span_latency
+repeats: 5
+status: runnable

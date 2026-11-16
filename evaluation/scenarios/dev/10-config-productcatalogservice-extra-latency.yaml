@@ -1,0 +1,32 @@
+# Dev split scenario 10 — a latency-injecting configuration rollout on productcatalogservice.
+# Upstream productcatalogservice reads the EXTRA_LATENCY env var and sleeps that long on
+# every request, so this is a latency fault that needs no NetworkChaos (D26-blocked). It is
+# the only runnable scenario that exercises the p95 latency-regression detector, and its
+# Deployment edit is a change event for the change-correlation term (D22).
+# Its callers are frontend, checkoutservice and recommendationservice.
+# The runner reverts the edit (`kubectl rollout undo`) at the end of `duration_s`.
+scenario_id: dev-config-10-productcatalogservice-extra-latency
+set: dev
+seed: 1010
+fault_type: config_change
+target_service: productcatalogservice
+target_namespace: default
+duration_s: 240
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: productcatalogservice
+expected_affected_services:
+  - productcatalogservice
+  - recommendationservice
+  - checkoutservice
+  - frontend
+# No `chaos` block: the fault is the Deployment edit below, applied after the warmup.
+config_change:
+  resource: deployment/productcatalogservice
+  container: server
+  env:
+    EXTRA_LATENCY: "1s"
+metrics_to_assert:
+  - span_latency
+repeats: 5
+status: runnable

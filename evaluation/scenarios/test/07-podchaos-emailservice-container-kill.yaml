@@ -1,0 +1,34 @@
+# Test split scenario 07 — PodChaos container-kill on emailservice.
+# Chaos Mesh PodChaos has no `container-exit` action; `container-kill` with the `server`
+# container named is the supported equivalent (same shape as testbed/chaos/oom-kill.yaml).
+# emailservice emits no traces of its own, so its failure is seen through restarts and
+# through checkoutservice's spans (checkout sends the order confirmation).
+scenario_id: test-podchaos-07-emailservice-container-kill
+set: test
+seed: 2007
+fault_type: container_kill
+target_service: emailservice
+target_namespace: default
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: emailservice
+expected_affected_services:
+  - emailservice
+  - checkoutservice
+  - frontend
+chaos:
+  kind: PodChaos
+  spec:
+    action: container-kill
+    mode: one
+    selector:
+      label: app
+      value: emailservice
+    containerNames:
+      - server
+metrics_to_assert:
+  - container_restarts_total
+  - span_latency
+repeats: 5
+status: runnable

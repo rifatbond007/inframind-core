@@ -21,8 +21,8 @@ src/inframind/evaluation/
 
 evaluation/
 ├── scenarios/
-│   ├── dev/            8 YAMLs (4 runnable + 4 blocked on D2-Chaos-runtime)
-│   └── test/           6 YAMLs (4 runnable + 2 blocked on D2-Chaos-runtime)
+│   ├── dev/            10 YAMLs (6 runnable + 4 blocked on D2-Chaos-runtime)
+│   └── test/           8 YAMLs (6 runnable + 2 blocked on D2-Chaos-runtime)
 ├── fixtures/<scenario>/r<repeat>/   live recordings only (written by `make eval-live`)
 │   ├── signals.ndjson
 │   ├── graph.json
@@ -79,9 +79,9 @@ repeat)` is the only path builder. A missing repeat is logged (`fixture_missing`
 produces no row, so the report's coverage shows the gap instead of reusing `r0`.
 Hand-written fixtures for tests live in `tests/fixtures/eval/` and are never evaluated.
 
-## 10.3 Scenarios — 14 YAMLs across the sacred split
+## 10.3 Scenarios — 18 YAMLs across the sacred split
 
-`evaluation/scenarios/dev/` (8 files, tuning) and `evaluation/scenarios/test/` (6 files,
+`evaluation/scenarios/dev/` (10 files, tuning) and `evaluation/scenarios/test/` (8 files,
 scored once). Each YAML:
 
 ```yaml
@@ -147,15 +147,22 @@ you meant to run that never loaded is worse than a crash.
 | dev-06 | network delay, emailservice | NetworkChaos | blocked — D2-Chaos-runtime |
 | dev-07 | network partition, cartservice | NetworkChaos | blocked — D2-Chaos-runtime |
 | dev-08 | pod-kill, recommendationservice | PodChaos | runnable |
+| dev-09 | pod-failure, currencyservice | PodChaos | runnable |
+| dev-10 | `EXTRA_LATENCY=1s` rollout, productcatalogservice | none (`config_change`) | runnable |
 | test-01 | pod-kill, checkoutservice | PodChaos | runnable |
 | test-02 | container-kill, cartservice | PodChaos | runnable |
 | test-03 | pod-failure, paymentservice | PodChaos | runnable |
 | test-04 | cpu-stress, currencyservice | StressChaos | blocked — D2-Chaos-runtime |
 | test-05 | network delay, checkoutservice | NetworkChaos | blocked — D2-Chaos-runtime |
 | test-06 | bad `REDIS_ADDR` rollout, cartservice | none (`config_change`) | runnable |
+| test-07 | container-kill, emailservice | PodChaos | runnable |
+| test-08 | bad `PRODUCT_CATALOG_SERVICE_ADDR` rollout, recommendationservice | none (`config_change`) | runnable |
 
 No `(fault_type, target_service)` pair appears in both splits
-(`test_no_fault_appears_in_both_splits`). 8 of the 14 are runnable today; D6 needs 12.
+(`test_no_fault_appears_in_both_splits`). 12 of the 18 are runnable while D26 blocks
+Stress/NetworkChaos, which meets D6's 12 (`test_d6_has_at_least_twelve_runnable_scenarios`).
+Every service except adservice and frontend is a root cause in at least one runnable
+scenario; dev-10 is the only runnable latency fault (the p95 latency-regression detector).
 
 The blocked files carry `# block_status: d2_chaos_runtime_docker` and
 `status: blocked`. The runner **refuses** them by default (exit code 3, message in

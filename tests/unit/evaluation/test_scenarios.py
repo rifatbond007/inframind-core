@@ -133,22 +133,31 @@ def test_load_dev_and_test_sets_are_disjoint(repo_paths: tuple[Path, Path]) -> N
     assert not overlap, f"scenario ids in both dev and test: {sorted(overlap)}"
 
 
-def test_dev_set_is_eight_scenarios(repo_paths: tuple[Path, Path]) -> None:
-    """The dev plan locked 8 scenarios; assert the count and split."""
+def test_dev_set_is_ten_scenarios(repo_paths: tuple[Path, Path]) -> None:
+    """Dev: 6 runnable (PodChaos + config changes) + 4 blocked on D2-Chaos-runtime."""
     _scenarios_root, _fixtures = repo_paths
     dev = load_set("dev")
-    assert len(dev) == 8, f"expected 8 dev scenarios, got {len(dev)}"
-    assert len(runnable(dev)) == 4, "expected 4 runnable dev scenarios"
+    assert len(dev) == 10, f"expected 10 dev scenarios, got {len(dev)}"
+    assert len(runnable(dev)) == 6, "expected 6 runnable dev scenarios"
     assert len(blocked(dev)) == 4, "expected 4 blocked dev scenarios"
 
 
-def test_test_set_is_six_scenarios(repo_paths: tuple[Path, Path]) -> None:
-    """The test plan locked 6 scenarios; assert the count and split."""
+def test_test_set_is_eight_scenarios(repo_paths: tuple[Path, Path]) -> None:
+    """Test: 6 runnable + 2 blocked on D2-Chaos-runtime."""
     _scenarios_root, _fixtures = repo_paths
     test = load_set("test")
-    assert len(test) == 6, f"expected 6 test scenarios, got {len(test)}"
-    assert len(runnable(test)) == 4
+    assert len(test) == 8, f"expected 8 test scenarios, got {len(test)}"
+    assert len(runnable(test)) == 6
     assert len(blocked(test)) == 2
+
+
+def test_d6_has_at_least_twelve_runnable_scenarios(repo_paths: tuple[Path, Path]) -> None:
+    """D6 needs >=12 distinct scenarios that can actually run while D26 blocks 6 of them."""
+    scenarios_root, _ = repo_paths
+    specs = load_set("dev", root=scenarios_root) + load_set("test", root=scenarios_root)
+    live = runnable(specs)
+    assert len(live) >= 12, f"only {len(live)} runnable scenarios; D6 needs 12"
+    assert len({(s.fault_type, s.target_service) for s in live}) == len(live), "duplicate fault"
 
 
 def test_blocked_scenarios_all_carry_d2_chaos_runtime_docker(repo_paths: tuple[Path, Path]) -> None:

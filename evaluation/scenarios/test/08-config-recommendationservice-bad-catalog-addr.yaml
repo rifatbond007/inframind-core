@@ -1,0 +1,31 @@
+# Test split scenario 08 — a bad configuration rollout on recommendationservice.
+# PRODUCT_CATALOG_SERVICE_ADDR points at a port nothing listens on, so recommendationservice
+# cannot reach productcatalogservice and its frontend calls fail. The root cause is the
+# misconfigured recommendationservice, not its healthy callee: a ranker that blames the
+# deepest service on the failing path gets this one wrong. Its Deployment edit is the
+# change event for the change-correlation term (D22).
+# The runner reverts the edit (`kubectl rollout undo`) at the end of `duration_s`.
+scenario_id: test-config-08-recommendationservice-bad-catalog-addr
+set: test
+seed: 2008
+fault_type: config_change
+target_service: recommendationservice
+target_namespace: default
+duration_s: 300
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: recommendationservice
+expected_affected_services:
+  - recommendationservice
+  - frontend
+# No `chaos` block: the fault is the Deployment edit below, applied after the warmup.
+config_change:
+  resource: deployment/recommendationservice
+  container: server
+  env:
+    PRODUCT_CATALOG_SERVICE_ADDR: "productcatalogservice:3551"
+metrics_to_assert:
+  - container_restarts_total
+  - span_latency
+repeats: 5
+status: runnable
