@@ -171,12 +171,13 @@ def test_assert_disjoint_raises_on_overlap() -> None:
 
 
 def test_fixture_dir_for_uses_scenario_id() -> None:
-    """The fixture directory name matches the scenario id."""
+    """The fixture directory is `<scenario_id>/r<repeat>`."""
     spec = parse_scenario(_minimal("foo"), source="foo")
     from inframind.evaluation.config import EvalParams
 
     params = EvalParams()
-    assert fixture_dir_for(spec, params).name == "foo"
+    path = fixture_dir_for(spec, params, 2)
+    assert (path.parent.name, path.name) == ("foo", "r2")
 
 
 def _minimal(scenario_id: str) -> dict:

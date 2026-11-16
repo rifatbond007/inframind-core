@@ -313,8 +313,10 @@ eval-soak: ## replay a fault-free window on the dev set to measure the false-pos
 eval-ablation: ## the four locked ablations on the dev set (asserts the D1 no-llm invariant).
 	$(PY) -m inframind.evaluation.runner.main --set dev --ablation
 
-eval-live: ## typed-by-a-human live path against kind-inframind. Refuses other contexts. No Make target sets this.
-	$(PY) -m inframind.evaluation.runner.main --set dev --live
+EVAL_SET ?= dev
+SCENARIO ?=
+eval-live: ## human-run: record real fixtures on kind-inframind (EVAL_SET=dev|test|all, SCENARIO=<id>). Needs `make up`.
+	$(PY) -m inframind.evaluation.runner.main --set $(EVAL_SET) --live $(if $(SCENARIO),--scenario $(SCENARIO))
 
 .PHONY: paper
 paper: ## build the paper artifact (not implemented yet — Phase P9)

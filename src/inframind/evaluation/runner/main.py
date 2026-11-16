@@ -9,8 +9,10 @@ Orchestration, nothing more:
 5. Run each baseline and each ablation over the same fixture.
 6. Score, aggregate, write the report.
 
-The `--live` flag is deliberately **not** on any Make target. A cluster-touching run must
-be typed by a human (PUKU.md: kubectl only against `kind-*`).
+`--live` records instead of scoring: for every selected scenario and repeat it injects the
+fault on the kind testbed and writes `evaluation/fixtures/<scenario>/r<repeat>/`
+(`runner/live.py`); a later replay scores those recordings. It is human-run only
+(`make eval-live`), and refuses any context that is not `kind-*`.
 """
 
 from __future__ import annotations
@@ -74,6 +76,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--live",
         action="store_true",
         help="run against a real cluster (kind-* only). Not wired to any Make target.",
+    )
+    parser.add_argument(
+        "--scenario",
+        action="append",
+        default=None,
+        help="only this scenario_id (repeatable); applies to replay and --live",
     )
     parser.add_argument(
         "--dry-run",
@@ -227,11 +235,12 @@ def _run_one(
     from ..scenarios import fixture_dir_for
 
     seed = params.seed_override if params.seed_override is not None else spec.seed
-    fixture_dir = fixture_dir_for(spec, params)
-    if not fixture_dir.exists():
+    fixture_dir = fixture_dir_for(spec, params, repeat)
+    if not (fixture_dir / "signals.ndjson").exists():
         log.warning(
             "fixture_missing",
             scenario_id=spec.scenario_id,
+            repeat=repeat,
             fixture_dir=str(fixture_dir),
         )
         return []
@@ -273,6 +282,43 @@ def _run_one(
     return rows
 
 
+def _record_live(specs: Sequence[ScenarioSpec], params: EvalParams) -> int:
+    """Record one fixture per (scenario, repeat) that has none yet. Returns an exit code."""
+    from ..scenarios import fixture_dir_for
+    from .live import LiveRunner, LiveRunnerError
+
+    try:
+        runner = LiveRunner(params=params)
+    except LiveRunnerError as e:
+        log.error("live_runner_refused", error=str(e))
+        return 5
+    for spec in specs:
+        if spec.is_blocked and not params.allow_blocked:
+            log.info("live_skip_blocked", scenario_id=spec.scenario_id, reason=spec.block_reason)
+            continue
+        for repeat in range(params.repeats):
+            target = fixture_dir_for(spec, params, repeat)
+            if (target / "signals.ndjson").exists() and not params.allow_overwrite:
+                log.info("live_fixture_exists", scenario_id=spec.scenario_id, repeat=repeat)
+                continue
+            try:
+                recording = runner.run_scenario(
+                    spec,
+                    repeat=repeat,
+                    record_to=target,
+                    allow_blocked=params.allow_blocked,
+                    overwrite=params.allow_overwrite,
+                )
+            except LiveRunnerError as e:
+                log.error("live_record_failed", scenario_id=spec.scenario_id, error=str(e))
+                return 5
+            print(
+                f"recorded {spec.scenario_id} r{repeat}: {recording.signal_count} signals, "
+                f"{recording.edge_count} edges -> {target}"
+            )
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     """Run the eval. Returns the process exit code."""
     args = parse_args(argv)
@@ -300,6 +346,8 @@ def main(argv: list[str] | None = None) -> int:
             log.error("scenario_load_failed", scenario_set=scenario_set, error=str(e))
             return 2
 
+        if args.scenario:
+            specs = [s for s in specs if s.scenario_id in set(args.scenario)]
         runnable_specs = runnable(specs)
         blocked_count = len(specs) - len(runnable_specs)
         log.info(
@@ -309,6 +357,12 @@ def main(argv: list[str] | None = None) -> int:
             runnable=len(runnable_specs),
             blocked=blocked_count,
         )
+
+        if args.live:  # recording skips blocked scenarios (logged) rather than refusing
+            code = _record_live(specs, params)
+            if code:
+                return code
+            continue
 
         if blocked_count and not params.allow_blocked:
             log.error(
@@ -336,7 +390,7 @@ def main(argv: list[str] | None = None) -> int:
                 )
                 all_rows.extend(rows)
 
-    if args.dry_run:
+    if args.dry_run or args.live:
         return 0
 
     results_dir = Path(params.results_dir)

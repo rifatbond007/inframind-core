@@ -16,14 +16,14 @@ src/inframind/evaluation/
 ├── baselines/          six D7 baselines; Baseline protocol; BaselineInput
 └── runner/
     ├── replay.py       NDJSON fixture → determinstic pipeline → ResultRow
-    ├── live.py         kubectl path; asserts kind-* context; refuses blocked scenarios
+    ├── live.py         records fixtures on kind-*: inject, revert, read the bus (10.2)
     └── main.py         CLI: --set, --dry-run, --soak, --ablation, --allow-blocked
 
 evaluation/
 ├── scenarios/
 │   ├── dev/            8 YAMLs (4 runnable + 4 blocked on D2-Chaos-runtime)
 │   └── test/           6 YAMLs (4 runnable + 2 blocked on D2-Chaos-runtime)
-├── fixtures/<scenario>/
+├── fixtures/<scenario>/r<repeat>/   live recordings only (written by `make eval-live`)
 │   ├── signals.ndjson
 │   ├── graph.json
 │   └── meta.json
@@ -52,16 +52,32 @@ a fixture**.
   the `window_s` passed in, so a fixture cannot be undiagnosable just because the
   default window is shorter than the fault duration.
 
-`runner/live.py` is the cluster path. It:
+`runner/live.py` is the cluster path. A live run **records; it never scores**: scoring
+always replays the recording, so every number is reproducible from the fixture alone.
+`LiveRunner.run_scenario(spec, repeat=k, record_to=...)`:
 
-1. Asserts the kubeconfig context starts with `kind-` (PUKU.md rule — no `~/.kube/config`).
-2. Refuses a blocked scenario unless `INFRAMIND_EVAL_ALLOW_BLOCKED=1`.
-3. Refuses to run on a non-`kind-` context even with the flag. No escape hatch that can
-   point at a shared cluster.
-4. `run_scenario` raises `NotImplementedError` until the recorder lands — see 10.13.
+1. Asserts the kubeconfig context starts with `kind-` (`$KUBECONFIG` or
+   `testbed/.kube/config`, never `~/.kube/config`) and pins `--context` on every call.
+   No flag lifts this.
+2. Refuses a blocked scenario unless `allow_blocked`, and an existing fixture unless
+   `overwrite`.
+3. Waits until `stream:signals` holds `max(warmup_s, INFRAMIND_EVAL_BASELINE_S)` seconds
+   of history (default 600 s: the detectors need 10 samples, Prometheus is polled every
+   30 s).
+4. At `onset_ts`, applies the CR from `build_chaos_manifest` (selector →
+   `labelSelectors` in `target_namespace`, extra `chaos.spec` keys verbatim, the
+   scenario's `duration` so Chaos Mesh self-recovers) in `INFRAMIND_EVAL_CHAOS_NAMESPACE`
+   (`chaos-testing`), or the `config_change` (`kubectl set env`).
+5. Holds `duration_s`, reverts in a `finally` (delete the CR / `kubectl rollout undo`),
+   then waits `cooldown_s + INFRAMIND_EVAL_SETTLE_S` (45 s).
+6. Writes `signals.ndjson` (bus entries from `onset - baseline` to the end, sorted by
+   `ts`), `graph.json` (every `GraphUpdate` up to the end folded into a fresh
+   `ServiceGraph`), and `meta.json` (`recorded_live: true`, `baseline_s`).
 
-The harness **ships unexecuted** on the live path. The replay integration test is the
-real gate.
+Each D6 repeat is its own recording in `r<repeat>/`; `fixture_dir_for(spec, params,
+repeat)` is the only path builder. A missing repeat is logged (`fixture_missing`) and
+produces no row, so the report's coverage shows the gap instead of reusing `r0`.
+Hand-written fixtures for tests live in `tests/fixtures/eval/` and are never evaluated.
 
 ## 10.3 Scenarios — 14 YAMLs across the sacred split
 
@@ -256,8 +272,9 @@ eval-ablation:   ## The four ablations.
 	$(RUN) -m inframind.evaluation.runner.main --set dev --ablation
 ```
 
-All four default to **replay**. `--live` is the flag that reaches for `kubectl`, and no
-Make target sets it — a cluster-touching run must be typed by a human.
+All four replay. `make eval-live [EVAL_SET=dev|test|all] [SCENARIO=<id>]` is the only
+target that reaches for `kubectl`; it records fixtures and is run by a human against
+`kind-inframind` after `make up`.
 
 ## 10.9 The `runner.main` CLI
 
@@ -267,8 +284,12 @@ inframind.evaluation.runner.main [--set {dev|test|all}] [--dry-run]
                                  [--fixture-dir PATH] [--results-dir PATH]
                                  [--soak | --ablation]
                                  [--allow-blocked] [--allow-overwrite]
-                                 [--live]
+                                 [--live] [--scenario ID ...]
 ```
+
+`--live` records the missing `r<repeat>` fixtures of every selected runnable scenario and
+skips blocked ones (unless `--allow-blocked`); it writes no results. `--scenario` (repeatable)
+narrows any run to the named scenario ids.
 
 Exit codes:
 
@@ -277,7 +298,8 @@ Exit codes:
 | 0 | Run completed; results written. |
 | 2 | Result-row validation failed (a row without `run_id` provenance). |
 | 3 | A blocked scenario was present and `--allow-blocked` was not set. |
-| 4 | The `--live` flag was set outside a `kind-*` kubeconfig context. |
+| 4 | The results directory exists and `--allow-overwrite` was not set. |
+| 5 | `--live`: not a `kind-*` context, no kubectl, or a recording failed. |
 
 `--dry-run` prints the resolved plan (per-scenario row count, baseline list, ablation list)
 and exits 0 without writing anything.
@@ -339,7 +361,9 @@ have no `run_id` provenance and the report test rejects one (see 10.11).
 - `test_module_dag.py` — `evaluation` does not import `storage`, `alerting`, or `api`.
 
 **Integration** (`tests/integration/test_evaluation_replay.py`): the full replay path over
-the seed corpus with no cluster — this is the real gate. It runs green on this box.
+the synthetic corpus in `tests/fixtures/eval/` with no cluster. `test_live.py` covers the
+recorder with fakeredis, a fake kubectl and a fake clock (CR shape, revert on interrupt,
+baseline wait, paging, `--live` CLI).
 
 ## 10.12 Hard rules
 
@@ -357,12 +381,8 @@ the seed corpus with no cluster — this is the real gate. It runs green on this
 
 ## 10.13 Out of scope for this PR
 
-- **Live cluster runs.** No docker daemon on this box. `live.py` ships with the kind-*
-  context check and the blocked-scenario guard wired, but `run_scenario` is
-  `NotImplementedError`. The recorder side lands with the first real P7 run.
-- **Fixture recording.** A live run will eventually write a `signals.ndjson` for replay;
-  that path is `live.py`'s next step. The seed fixtures in this PR are checked-in
-  manually.
+- **Recordings.** The recorder is implemented and unit-tested; no real fixture is
+  committed until a human runs `make eval-live` on the testbed.
 - **Committing any result numbers.** Nothing to report until a run happens. P9's
   "never invent a number" is honoured by committing an empty directory.
 - **LaTeX / `results-to-latex`.** P9. P7 produces JSON and CSV; P9 renders tables.

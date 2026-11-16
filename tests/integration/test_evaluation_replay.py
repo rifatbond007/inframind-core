@@ -20,7 +20,8 @@ from inframind.evaluation.scenarios import blocked, load_set, runnable
 from inframind.evaluation.scoring import default_scorer, score
 
 REPO = Path(__file__).resolve().parents[2]
-FIXTURES = REPO / "evaluation" / "fixtures"
+#: The synthetic test corpus (tests/fixtures/eval/README.md), never the live recordings.
+FIXTURES = REPO / "tests" / "fixtures" / "eval"
 
 
 def _runnable_dev_with_fixtures(params: EvalParams) -> list:
@@ -37,7 +38,7 @@ def test_replay_corpus_reproduces_top1() -> None:
 
     for spec in scenarios:
         row = replay_run(
-            FIXTURES / spec.scenario_id,
+            FIXTURES / spec.scenario_id / "r0",
             spec=spec,
             scorer=default_scorer,
             method="infra",
@@ -62,7 +63,7 @@ def test_replay_is_deterministic_across_repeats() -> None:
     rankings = set()
     for repeat in range(params.repeats):
         row = replay_run(
-            FIXTURES / spec.scenario_id,
+            FIXTURES / spec.scenario_id / "r0",
             spec=spec,
             scorer=default_scorer,
             method="infra",
@@ -82,7 +83,7 @@ def test_seed_override_makes_a_run_bit_reproducible() -> None:
     params = EvalParams(fixture_dir=str(FIXTURES), seed_override=99999)
     spec = _runnable_dev_with_fixtures(params)[0]
     row = replay_run(
-        FIXTURES / spec.scenario_id,
+        FIXTURES / spec.scenario_id / "r0",
         spec=spec,
         scorer=default_scorer,
         method="infra",
@@ -103,7 +104,7 @@ def test_every_baseline_produces_a_ranking_for_every_fixture() -> None:
 
     params = EvalParams(fixture_dir=str(FIXTURES))
     for spec in _runnable_dev_with_fixtures(params):
-        signals = replay_signals(FIXTURES / spec.scenario_id / "signals.ndjson")
+        signals = replay_signals(FIXTURES / spec.scenario_id / "r0" / "signals.ndjson")
         baseline_input = _baseline_input_from_replay(signals=signals, incidents=[])
         rows = _run_baselines(
             spec=spec,

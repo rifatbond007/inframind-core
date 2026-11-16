@@ -228,9 +228,13 @@ def assert_disjoint(dev: Sequence[ScenarioSpec], test: Sequence[ScenarioSpec]) -
         raise ScenarioError(f"scenario_id(s) appear in both dev and test: {sorted(overlap)}")
 
 
-def fixture_dir_for(spec: ScenarioSpec, params: EvalParams) -> Path:
-    """Return the fixture directory for `spec` under `params.fixture_dir`."""
-    return Path(params.fixture_dir) / spec.fixture_dirname
+def fixture_dir_for(spec: ScenarioSpec, params: EvalParams, repeat: int) -> Path:
+    """Return `<fixture_dir>/<scenario_id>/r<repeat>/`, one recording per repeat.
+
+    Each of the D6 repeats is its own live recording; replaying one fixture five times would
+    only measure determinism and report a zero standard deviation.
+    """
+    return Path(params.fixture_dir) / spec.fixture_dirname / f"r{repeat}"
 
 
 def _debug_dump(spec: ScenarioSpec) -> str:

@@ -19,7 +19,7 @@ from inframind.evaluation.scenarios import fixture_dir_for, load_set
 
 
 def _repo_fixtures(repo_paths: tuple[Path, Path]) -> Path:
-    """The committed seed corpus lives at `evaluation/fixtures/<scenario_id>/`."""
+    """The synthetic test corpus lives at `tests/fixtures/eval/<scenario_id>/r<repeat>/`."""
     _scenarios, fixtures = repo_paths
     return fixtures
 
@@ -27,7 +27,7 @@ def _repo_fixtures(repo_paths: tuple[Path, Path]) -> Path:
 def test_replay_signals_reads_real_corpus(repo_paths: tuple[Path, Path]) -> None:
     """The committed seed corpus parses and is ts-ordered."""
     fixtures = _repo_fixtures(repo_paths)
-    for path in fixtures.glob("*/signals.ndjson"):
+    for path in fixtures.glob("*/r*/signals.ndjson"):
         signals = replay_signals(path)
         assert signals, f"{path} has no signals"
         for prev, curr in itertools.pairwise(signals):
@@ -57,7 +57,7 @@ def test_replay_signals_rejects_invalid_signal(tmp_path: Path) -> None:
 def test_load_graph_snapshot_round_trips(repo_paths: tuple[Path, Path]) -> None:
     """A committed graph.json survives a load-snapshot round trip."""
     fixtures = _repo_fixtures(repo_paths)
-    for path in fixtures.glob("*/graph.json"):
+    for path in fixtures.glob("*/r*/graph.json"):
         graph = load_graph_snapshot(path)
         services = graph.services()
         assert services, f"{path}: empty graph after load"
@@ -129,7 +129,7 @@ def test_full_replay_round_trip_for_real_fixtures(
     assert scenarios, "no committed fixture had a matching scenario"
 
     for spec in scenarios:
-        fixture_dir = fixture_dir_for(spec, params)
+        fixture_dir = fixture_dir_for(spec, params, 0)
         assert fixture_dir.exists(), f"missing fixture dir for {spec.scenario_id}"
         row = replay_run(
             fixture_dir,
@@ -158,7 +158,7 @@ def test_replay_run_is_repeatable(repo_paths: tuple[Path, Path], tmp_path: Path)
     spec = next(
         s for s in load_set("dev") if s.scenario_id == "dev-podchaos-01-cartservice-pod-kill"
     )
-    fixture_dir = fixture_dir_for(spec, params)
+    fixture_dir = fixture_dir_for(spec, params, 0)
     row_a = replay_run(
         fixture_dir,
         spec=spec,
@@ -185,9 +185,7 @@ def test_replay_run_is_repeatable(repo_paths: tuple[Path, Path], tmp_path: Path)
     assert row_a.top1_correct == row_b.top1_correct
 
 
-def test_replay_run_rejects_missing_fixture(
-    repo_paths: tuple[Path, Path],
-) -> None:
+def test_replay_run_rejects_missing_fixture(tmp_path: Path) -> None:
     """A missing `signals.ndjson` is a `ReplayError`, not an empty row.
 
     `replay_run` reads the fixture itself, so it must not paper over a missing corpus: a
@@ -196,13 +194,10 @@ def test_replay_run_rejects_missing_fixture(
     from inframind.evaluation.runner.replay import replay_run
     from inframind.evaluation.scoring import default_scorer
 
-    fixtures = _repo_fixtures(repo_paths)
-    params = EvalParams(fixture_dir=str(fixtures))
+    params = EvalParams(fixture_dir=str(tmp_path))
     spec = load_set("dev")[0]
-    ghost_dir = fixture_dir_for(spec, params)  # a real scenario with no fixture committed
-
-    if ghost_dir.exists():
-        pytest.skip("every dev scenario now has a committed fixture")
+    ghost_dir = fixture_dir_for(spec, params, 0)  # an empty fixture root: nothing recorded
+    assert not ghost_dir.exists()
 
     with pytest.raises(ReplayError, match="does not exist"):
         replay_run(
@@ -216,6 +211,15 @@ def test_replay_run_rejects_missing_fixture(
             repeat=0,
             params=params,
         )
+
+
+def test_fixture_dir_for_is_one_directory_per_repeat(tmp_path: Path) -> None:
+    """Each D6 repeat replays its own recording, never the same fixture five times."""
+    params = EvalParams(fixture_dir=str(tmp_path))
+    spec = load_set("dev")[0]
+    dirs = {fixture_dir_for(spec, params, r) for r in range(5)}
+    assert len(dirs) == 5
+    assert fixture_dir_for(spec, params, 3) == tmp_path / spec.scenario_id / "r3"
 
 
 def test_d1_invariant_no_llm_in_ranking_path(
@@ -235,7 +239,7 @@ def test_d1_invariant_no_llm_in_ranking_path(
     spec = next(
         s for s in load_set("dev") if s.scenario_id == "dev-podchaos-01-cartservice-pod-kill"
     )
-    fixture_dir = fixture_dir_for(spec, params)
+    fixture_dir = fixture_dir_for(spec, params, 0)
     no_llm_row = replay_run(
         fixture_dir,
         spec=spec,

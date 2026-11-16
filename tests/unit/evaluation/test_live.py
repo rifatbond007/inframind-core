@@ -1,0 +1,353 @@
+"""Live recorder tests: fake kubectl, fakeredis and a fake clock; no cluster is touched."""
+
+from __future__ import annotations
+
+import json
+from collections.abc import Sequence
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
+from typing import Any
+
+import fakeredis
+import pytest
+
+from inframind.common import stream_keys
+from inframind.common.graph_update import GraphUpdate
+from inframind.common.ids import new_ulid
+from inframind.common.signal import Severity, Signal, SignalType, Source
+from inframind.evaluation.config import EvalParams
+from inframind.evaluation.runner.live import (
+    BlockedScenarioError,
+    LiveRunner,
+    LiveRunnerError,
+    WrongKubeContext,
+    build_chaos_manifest,
+    chaos_resource_name,
+    config_change_commands,
+    read_signals,
+)
+from inframind.evaluation.runner.replay import replay_signals
+from inframind.evaluation.scenarios import load_set
+from inframind.evaluation.schema import FixtureMeta, ScenarioSpec
+
+T0 = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
+
+
+def _spec(scenario_id: str) -> ScenarioSpec:
+    """A committed scenario by id (dev or test)."""
+    for spec in load_set("dev") + load_set("test"):
+        if spec.scenario_id == scenario_id:
+            return spec
+    raise KeyError(scenario_id)
+
+
+class FakeKubectl:
+    """Records every argv; answers `current-context` with `context`."""
+
+    def __init__(self, context: str = "kind-inframind", fail_on: str | None = None) -> None:
+        self.context = context
+        self.fail_on = fail_on
+        self.calls: list[tuple[list[str], str | None]] = []
+
+    def __call__(self, argv: Sequence[str], stdin: str | None) -> tuple[int, str, str]:
+        argv = list(argv)
+        self.calls.append((argv, stdin))
+        if "current-context" in argv:
+            return 0, self.context + "\n", ""
+        if self.fail_on and self.fail_on in argv:
+            return 1, "", "boom"
+        return 0, "", ""
+
+    def verbs(self) -> list[str]:
+        """The kubectl verb of each call after the context check."""
+        out = []
+        for argv, _ in self.calls[1:]:
+            rest = [a for a in argv[1:] if not a.startswith("--")]
+            rest = rest[2:] if rest[:1] == ["-n"] else rest
+            out.append(rest[0])
+        return out
+
+
+class FakeClock:
+    """`now()` and `sleep()` that move together, so a 10-minute run takes no time."""
+
+    def __init__(self, start: datetime) -> None:
+        self.t = start
+        self.slept: list[float] = []
+
+    def now(self) -> datetime:
+        return self.t
+
+    def sleep(self, seconds: float) -> None:
+        self.slept.append(seconds)
+        self.t += timedelta(seconds=seconds)
+
+
+def _signal(ts: datetime, service: str = "cartservice") -> Signal:
+    return Signal(
+        id=new_ulid(),
+        ts=ts,
+        source=Source.PROMETHEUS,
+        type=SignalType.METRIC,
+        service=service,
+        severity=Severity.INFO,
+        attrs={"metric": "cpu_cores", "value": 0.01},
+    )
+
+
+def _xadd(redis: Any, stream: str, at: datetime, payload: str, seq: int = 0) -> None:
+    redis.xadd(stream, {"data": payload}, id=f"{int(at.timestamp() * 1000)}-{seq}")
+
+
+def _seed_bus(redis: Any, *, history_s: int, run_s: int) -> None:
+    """Publish one signal every 30 s from `T0 - history_s` to `T0 + run_s`.
+
+    Each entry's `ts` lags its publish time by a varying amount, the way collectors do, so
+    publish order is not `ts` order.
+    """
+    for i, offset in enumerate(range(-history_s, run_s, 30)):
+        at = T0 + timedelta(seconds=offset)
+        ts = at - timedelta(seconds=(i % 3) * 20)
+        _xadd(redis, stream_keys.SIGNALS, at, _signal(ts).model_dump_json())
+    update = GraphUpdate(
+        caller="checkoutservice", callee="cartservice", latency_ms=3.0, observed_at=T0
+    )
+    for seq in range(3):
+        _xadd(redis, stream_keys.GRAPH_UPDATES, T0, update.model_dump_json(), seq)
+
+
+def _runner(
+    redis: Any, clock: FakeClock, kubectl: FakeKubectl, tmp_path: Path, **params: Any
+) -> LiveRunner:
+    kubeconfig = tmp_path / "kubeconfig"
+    kubeconfig.write_text("")
+    return LiveRunner(
+        kubeconfig,
+        params=EvalParams(**{"baseline_s": 600.0, "settle_s": 45.0, **params}),
+        redis=redis,
+        run_command=kubectl,
+        now=clock.now,
+        sleep=clock.sleep,
+    )
+
+
+# --- guards -----------------------------------------------------------------------------
+
+
+def test_refuses_a_context_that_is_not_kind(tmp_path: Path) -> None:
+    """Every kubectl call is pinned to a kind-* context; anything else is refused."""
+    with pytest.raises(WrongKubeContext, match="not a kind cluster"):
+        _runner(None, FakeClock(T0), FakeKubectl("prod-cluster"), tmp_path)
+
+
+def test_refuses_a_blocked_scenario(tmp_path: Path) -> None:
+    runner = _runner(fakeredis.FakeRedis(), FakeClock(T0), FakeKubectl(), tmp_path)
+    with pytest.raises(BlockedScenarioError):
+        runner.run_scenario(
+            _spec("dev-stresschaos-04-cartservice-cpu-stress"), repeat=0, record_to=tmp_path
+        )
+
+
+def test_refuses_to_overwrite_a_recording(tmp_path: Path) -> None:
+    (tmp_path / "signals.ndjson").write_text("{}\n")
+    runner = _runner(fakeredis.FakeRedis(), FakeClock(T0), FakeKubectl(), tmp_path)
+    with pytest.raises(LiveRunnerError, match="refusing to overwrite"):
+        runner.run_scenario(
+            _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path
+        )
+
+
+# --- pure builders ----------------------------------------------------------------------
+
+
+def test_chaos_manifest_for_container_kill() -> None:
+    """Selector, containerNames and a self-expiring duration all reach the CR."""
+    spec = _spec("dev-podchaos-02-shippingservice-container-kill")
+    cr = build_chaos_manifest(spec, name="n")
+    assert cr["apiVersion"] == "chaos-mesh.org/v1alpha1"
+    assert cr["kind"] == "PodChaos"
+    assert cr["metadata"] == {
+        "name": "n",
+        "namespace": "chaos-testing",
+        "labels": {"app.kubernetes.io/part-of": "inframind-eval"},
+    }
+    assert cr["spec"]["action"] == "container-kill"
+    assert cr["spec"]["containerNames"] == ["server"]
+    assert cr["spec"]["selector"] == {
+        "namespaces": ["default"],
+        "labelSelectors": {"app": "shippingservice"},
+    }
+    assert cr["spec"]["duration"] == "180s"
+
+
+def test_chaos_manifest_for_stress_has_no_action() -> None:
+    """StressChaos is defined by its stressors; an `action` key fails CRD validation."""
+    cr = build_chaos_manifest(_spec("dev-stresschaos-04-cartservice-cpu-stress"), name="n")
+    assert "action" not in cr["spec"]
+    assert cr["spec"]["stressors"] == {"cpu": {"workers": 2, "load": 80}}
+
+
+def test_chaos_resource_name_is_dns_safe_and_bounded() -> None:
+    spec = _spec("test-podchaos-03-paymentservice-pod-failure")
+    name = chaos_resource_name(spec, 4)
+    assert name == "eval-test-podchaos-03-paymentservice-pod-failure-r4"
+    long = ScenarioSpec(**{**_as_kwargs(spec), "scenario_id": "x" * 80})
+    assert len(chaos_resource_name(long, 4)) <= 63
+    assert chaos_resource_name(long, 4).endswith("-r4")
+
+
+def _as_kwargs(spec: ScenarioSpec) -> dict[str, Any]:
+    return {f: getattr(spec, f) for f in spec.__dataclass_fields__}
+
+
+def test_config_change_commands_set_env_and_rollout_undo() -> None:
+    apply, revert = config_change_commands(_spec("test-config-06-cartservice-bad-redis-addr"))
+    assert apply == [
+        "-n",
+        "default",
+        "set",
+        "env",
+        "deployment/cartservice",
+        "-c",
+        "server",
+        "REDIS_ADDR=redis-cart:6380",
+    ]
+    assert revert == ["-n", "default", "rollout", "undo", "deployment/cartservice"]
+
+
+# --- a full recording -------------------------------------------------------------------
+
+
+def test_run_scenario_records_a_replayable_fixture(tmp_path: Path) -> None:
+    """Inject, hold, revert, settle, record: the fixture replays and carries provenance."""
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=600)
+    clock, kubectl = FakeClock(T0), FakeKubectl()
+    spec = _spec("dev-podchaos-01-cartservice-pod-kill")
+    target = tmp_path / spec.scenario_id / "r2"
+
+    recording = _runner(redis, clock, kubectl, tmp_path).run_scenario(
+        spec, repeat=2, record_to=target
+    )
+
+    # The CR was applied as JSON on stdin, then deleted by name after the fault duration.
+    assert kubectl.verbs() == ["apply", "delete"]
+    applied = json.loads(kubectl.calls[1][1] or "")
+    assert applied["metadata"]["name"] == "eval-dev-podchaos-01-cartservice-pod-kill-r2"
+    assert all("--context=kind-inframind" in argv for argv, _ in kubectl.calls[1:])
+    # History was already long enough: no baseline wait; hold the fault, then settle.
+    assert clock.slept == [spec.duration_s, spec.cooldown_s + 45.0]
+
+    signals = replay_signals(target / "signals.ndjson")  # strict: monotone ts, valid lines
+    assert len(signals) == recording.signal_count > 0
+    end = T0 + timedelta(seconds=spec.duration_s + spec.cooldown_s + 45.0)
+    assert signals[0].ts >= T0 - timedelta(seconds=600 + 60)
+    assert signals[-1].ts <= end
+
+    meta = FixtureMeta.from_json(target / "meta.json")
+    assert (meta.scenario_id, meta.seed, meta.repeat) == (spec.scenario_id, spec.seed, 2)
+    assert meta.onset_ts == T0
+    assert meta.window_s == spec.duration_s + spec.cooldown_s
+    assert json.loads((target / "meta.json").read_text())["recorded_live"] is True
+
+    graph = json.loads((target / "graph.json").read_text())
+    assert [(e["caller"], e["callee"], e["observations"]) for e in graph["edges"]] == [
+        ("checkoutservice", "cartservice", 3)
+    ]
+
+
+def test_run_scenario_waits_for_a_full_baseline(tmp_path: Path) -> None:
+    """With only 100 s of history it sleeps the missing 500 s before injecting."""
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=100, run_s=1500)
+    clock = FakeClock(T0)
+    spec = _spec("dev-podchaos-01-cartservice-pod-kill")
+    recording = _runner(redis, clock, FakeKubectl(), tmp_path).run_scenario(
+        spec, repeat=0, record_to=tmp_path / "r0"
+    )
+    assert clock.slept[0] == pytest.approx(500.0)
+    assert recording.meta.onset_ts == T0 + timedelta(seconds=500)
+
+
+def test_run_scenario_reverts_the_fault_when_interrupted(tmp_path: Path) -> None:
+    """A crash mid-fault still deletes the CR (the revert is in a `finally`)."""
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=60)
+    kubectl = FakeKubectl()
+
+    def interrupted(_seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    runner = _runner(redis, FakeClock(T0), kubectl, tmp_path)
+    runner._sleep = interrupted
+    with pytest.raises(KeyboardInterrupt):
+        runner.run_scenario(
+            _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path / "r0"
+        )
+    assert kubectl.verbs() == ["apply", "delete"]
+    assert not (tmp_path / "r0").exists()
+
+
+def test_run_scenario_applies_and_undoes_a_config_change(tmp_path: Path) -> None:
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=600)
+    kubectl = FakeKubectl()
+    _runner(redis, FakeClock(T0), kubectl, tmp_path).run_scenario(
+        _spec("test-config-06-cartservice-bad-redis-addr"), repeat=0, record_to=tmp_path / "r0"
+    )
+    assert kubectl.verbs() == ["set", "rollout"]
+
+
+def test_run_scenario_refuses_an_empty_bus(tmp_path: Path) -> None:
+    runner = _runner(fakeredis.FakeRedis(), FakeClock(T0), FakeKubectl(), tmp_path)
+    with pytest.raises(LiveRunnerError, match="stream:signals is empty"):
+        runner.run_scenario(
+            _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path / "r0"
+        )
+
+
+def test_read_signals_pages_through_a_long_stream(monkeypatch: pytest.MonkeyPatch) -> None:
+    """More entries than one XRANGE page are all read, in ts order."""
+    import inframind.evaluation.runner.live as live
+
+    monkeypatch.setattr(live, "_XRANGE_PAGE", 7)
+    redis = fakeredis.FakeRedis()
+    for i in range(30):
+        at = T0 + timedelta(seconds=i)
+        _xadd(redis, stream_keys.SIGNALS, at, _signal(at).model_dump_json())
+    signals = read_signals(redis, T0, T0 + timedelta(seconds=29))
+    assert len(signals) == 30
+    assert [s.ts for s in signals] == sorted(s.ts for s in signals)
+
+
+# --- the CLI ------------------------------------------------------------------------------
+
+
+def test_main_live_records_every_repeat_and_skips_blocked(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--live` asks for one recording per repeat, in r<k> dirs, and never scores."""
+    import inframind.evaluation.runner.live as live
+    from inframind.evaluation.runner import main as main_mod
+
+    calls: list[tuple[str, int, Path]] = []
+
+    class StubRunner:
+        def __init__(self, **_: Any) -> None:
+            pass
+
+        def run_scenario(self, spec: ScenarioSpec, *, repeat: int, record_to: Path, **_: Any):
+            calls.append((spec.scenario_id, repeat, record_to))
+            meta = FixtureMeta(spec.scenario_id, spec.seed, repeat, T0, 1.0)
+            return live.Recording(record_to, meta, 1, 0)
+
+    monkeypatch.setattr(live, "LiveRunner", StubRunner)
+    monkeypatch.setenv("INFRAMIND_EVAL_FIXTURE_DIR", str(tmp_path / "fx"))
+    monkeypatch.setenv("INFRAMIND_EVAL_RESULTS_DIR", str(tmp_path / "results"))
+    sid = "dev-podchaos-01-cartservice-pod-kill"
+    blocked = "dev-stresschaos-04-cartservice-cpu-stress"
+
+    assert main_mod.main(["--set", "dev", "--live", "--scenario", sid, "--scenario", blocked]) == 0
+    assert [(c[0], c[1]) for c in calls] == [(sid, r) for r in range(5)]
+    assert calls[3][2] == tmp_path / "fx" / sid / "r3"
+    assert not (tmp_path / "results").exists()

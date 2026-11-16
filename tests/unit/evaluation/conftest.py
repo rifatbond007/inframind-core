@@ -22,7 +22,11 @@ def _isolated_eval_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Itera
 
 @pytest.fixture
 def repo_paths() -> tuple[Path, Path]:
-    """Return `(scenarios_root, fixtures_root)` pointing at the real repo locations."""
+    """Return `(scenarios_root, fixtures_root)`: the real scenarios, the synthetic fixtures.
+
+    The fixtures are the hand-written test corpus in `tests/fixtures/eval/`, never the live
+    recordings in `evaluation/fixtures/`.
+    """
     # Path is: tests/unit/evaluation/conftest.py -> four `.parents` to the repo root.
     repo = Path(__file__).resolve().parents[3]
-    return repo / "evaluation" / "scenarios", repo / "evaluation" / "fixtures"
+    return repo / "evaluation" / "scenarios", repo / "tests" / "fixtures" / "eval"
