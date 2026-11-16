@@ -609,3 +609,19 @@ def test_the_status_readers_on_real_shapes() -> None:
     # New pod not Ready: the old pod still serves, so the fault has not reached traffic.
     assert rollout_state(deploy(4, 4, 1, 2), 3)[0] is None
     assert rollout_state(deploy(3, 3, 1, 1), 3)[0] is None  # the edit changed nothing
+
+
+def test_a_recording_whose_fault_never_took_effect_is_not_scored(tmp_path: Path) -> None:
+    """dev-02: `fault_injected: false` yields no row, whatever the scenario's status."""
+    from inframind.evaluation.runner.main import _no_fault, _run_one
+
+    spec = _spec("dev-podchaos-01-cartservice-pod-kill")
+    d = _live_fixture(tmp_path / spec.scenario_id, burst_before_onset=0)
+    assert _no_fault(spec, d, 0) is False
+    meta = json.loads((d / "meta.json").read_text())
+    (d / "meta.json").write_text(json.dumps({**meta, "fault_injected": False}))
+    assert _no_fault(spec, d, 0) is True
+    params = EvalParams(fixture_dir=str(tmp_path))
+    assert (
+        _run_one(spec=spec, params=params, repeat=0, run_baselines=True, run_ablations=False) == []
+    )

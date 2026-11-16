@@ -259,6 +259,22 @@ def _run_baselines(
     return rows
 
 
+def _no_fault(spec: ScenarioSpec, fixture_dir: Path, repeat: int) -> bool:
+    """True (and logged) when the recording says its fault never took effect.
+
+    `meta.json` `"fault_injected": false` marks a repeat whose fault the runtime refused
+    (dev-02's container-kill, D26). Scoring it would credit or blame a method for a fault
+    that did not happen, so it yields no row, even if the scenario is unblocked later.
+    """
+    import json
+
+    meta_path = fixture_dir / "meta.json"
+    if not meta_path.exists() or json.loads(meta_path.read_text()).get("fault_injected", True):
+        return False
+    log.warning("fixture_no_fault", scenario_id=spec.scenario_id, repeat=repeat)
+    return True
+
+
 def _dirty_baseline(spec: ScenarioSpec, fixture_dir: Path, repeat: int) -> bool:
     """True (and logged) when a live recording's baseline cannot be scored (`baseline_problem`).
 
@@ -306,7 +322,7 @@ def _run_one(
             fixture_dir=str(fixture_dir),
         )
         return []
-    if _dirty_baseline(spec, fixture_dir, repeat):
+    if _no_fault(spec, fixture_dir, repeat) or _dirty_baseline(spec, fixture_dir, repeat):
         return []
 
     run_id = make_run_id(spec=spec, seed=seed, repeat=repeat, method=method)
