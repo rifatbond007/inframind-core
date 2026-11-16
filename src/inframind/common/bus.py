@@ -111,13 +111,16 @@ async def publish_incident(
 def _dedup_identity(model: BaseModel) -> str:
     """The stable identity a dedup key is built from.
 
-    Every wire model in `common/` carries an `id` (`Signal`, `Incident`). `GraphUpdate` has no
-    id — it is a sampled call edge, so `caller|callee|observed_at` is what makes a redelivery
-    recognisable as a duplicate.
+    Every wire model in `common/` carries an `id` (`Signal`, `Incident`). An `Incident` is
+    republished under the same id once per revision, so its identity is `id@revision`: keying
+    on the id alone would treat every revision after the first (including `resolved`) as a
+    redelivery and drop it. `GraphUpdate` has no id — it is a sampled call edge, so
+    `caller|callee|observed_at` is what makes a redelivery recognisable as a duplicate.
     """
     ident = getattr(model, "id", None)
     if isinstance(ident, str):
-        return ident
+        revision = getattr(model, "revision", None)
+        return f"{ident}@{revision}" if isinstance(revision, int) else ident
     observed = getattr(model, "observed_at", None)
     if observed is not None:
         return (
