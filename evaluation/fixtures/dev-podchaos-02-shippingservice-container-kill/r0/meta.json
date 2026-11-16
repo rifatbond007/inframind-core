@@ -1,0 +1,10 @@
+{
+  "scenario_id": "dev-podchaos-02-shippingservice-container-kill",
+  "seed": 1002,
+  "repeat": 0,
+  "onset_ts": "2026-11-16T11:20:30.904646+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-16T11:25:18.430086+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true
+}
