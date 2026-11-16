@@ -1,0 +1,34 @@
+# Test split scenario 09 — PodChaos pod-failure on productcatalogservice.
+# Replaces test-02 (container-kill is blocked by D26). pod-failure keeps the pod object but
+# swaps its container for `pause` for the whole duration (goes through the Kubernetes API;
+# verified to inject on this testbed 2026-11-16). productcatalogservice is called by
+# frontend, checkoutservice and recommendationservice; dev-03 kills the same service, so
+# this tests a different failure mode (unavailable for 180 s, not restarted at once).
+scenario_id: test-podchaos-09-productcatalogservice-pod-failure
+set: test
+seed: 2009
+fault_type: pod_failure
+target_service: productcatalogservice
+target_namespace: default
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: productcatalogservice
+expected_affected_services:
+  - productcatalogservice
+  - recommendationservice
+  - checkoutservice
+  - frontend
+chaos:
+  kind: PodChaos
+  spec:
+    action: pod-failure
+    mode: all
+    selector:
+      label: app
+      value: productcatalogservice
+metrics_to_assert:
+  - cpu_cores
+  - span_latency
+repeats: 5
+status: runnable

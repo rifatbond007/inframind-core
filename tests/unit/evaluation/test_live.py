@@ -122,7 +122,11 @@ class FakeKubectl:
         if "get" in argv and "json" in argv:
             if any(a.startswith("deployment/") for a in argv):
                 gen, observed = self.deploy.pop(0) if len(self.deploy) > 1 else self.deploy[0]
-                body = {"metadata": {"generation": gen}, "status": {"observedGeneration": observed}}
+                body = {
+                    "metadata": {"generation": gen},
+                    "spec": {"replicas": 1},
+                    "status": {"observedGeneration": observed, "updatedReplicas": 1, "replicas": 1},
+                }
                 return 0, json.dumps(body), ""
             return 0, json.dumps(self.chaos), ""
         return 0, "", ""
@@ -490,8 +494,8 @@ def test_read_signals_drops_late_published_lines_from_before_the_window() -> Non
     assert [s.id for s in got] == [inside.id]
 
 
-def _live_fixture(root: Path, *, burst_before_onset: bool) -> Path:
-    """A minimal live recording: quiet CPU samples, optionally an error burst pre-fault."""
+def _live_fixture(root: Path, *, burst_before_onset: int) -> Path:
+    """A minimal live recording: quiet CPU samples and `burst_before_onset` error lines."""
     d = root / "r0"
     d.mkdir(parents=True)
     signals = [_signal(T0 + timedelta(seconds=s)) for s in range(-600, 120, 30)]
@@ -505,7 +509,7 @@ def _live_fixture(root: Path, *, burst_before_onset: bool) -> Path:
                 severity=Severity.CRITICAL,
                 attrs={"message": "could not retrieve cart"},
             )
-            for i in range(6)
+            for i in range(burst_before_onset)
         ]
     signals.sort(key=lambda s: (s.ts, s.id))
     (d / "signals.ndjson").write_text("".join(s.model_dump_json() + "\n" for s in signals))
@@ -515,14 +519,16 @@ def _live_fixture(root: Path, *, burst_before_onset: bool) -> Path:
     return d
 
 
-def test_a_recording_with_an_anomaly_in_its_baseline_is_not_scored(tmp_path: Path) -> None:
-    """The live dev-01 r1/r3 case: an earlier fault inside the baseline means no row."""
+def test_only_an_incident_sized_burst_before_the_fault_blocks_scoring(tmp_path: Path) -> None:
+    """An earlier fault (a burst far over the noise level) is refused; a blip is noise."""
     from inframind.evaluation.runner.main import _dirty_baseline
 
     spec = _spec("dev-podchaos-01-cartservice-pod-kill")
-    dirty = _live_fixture(tmp_path / "dirty", burst_before_onset=True)
-    clean = _live_fixture(tmp_path / "clean", burst_before_onset=False)
-    assert _dirty_baseline(spec, dirty, 0) is True
+    blip = _live_fixture(tmp_path / "blip", burst_before_onset=6)
+    earlier_fault = _live_fixture(tmp_path / "fault", burst_before_onset=80)
+    clean = _live_fixture(tmp_path / "clean", burst_before_onset=0)
+    assert _dirty_baseline(spec, blip, 0) is False
+    assert _dirty_baseline(spec, earlier_fault, 0) is True
     assert _dirty_baseline(spec, clean, 0) is False
 
 
@@ -586,8 +592,20 @@ def test_the_status_readers_on_real_shapes() -> None:
     verdict, why = chaos_injection_state(RUNTIME_REFUSED)
     assert verdict is False and "containerd" in why
     assert chaos_injection_state({})[0] is None
-    assert rollout_state({"metadata": {"generation": 4}, "status": {"observedGeneration": 4}}, 3)[0]
-    assert (
-        rollout_state({"metadata": {"generation": 4}, "status": {"observedGeneration": 3}}, 3)[0]
-        is None
-    )
+
+    def deploy(gen: int, observed: int, updated: int, total: int) -> dict:
+        return {
+            "metadata": {"generation": gen},
+            "spec": {"replicas": 1},
+            "status": {
+                "observedGeneration": observed,
+                "updatedReplicas": updated,
+                "replicas": total,
+            },
+        }
+
+    assert rollout_state(deploy(4, 4, 1, 1), 3)[0] is True
+    assert rollout_state(deploy(4, 3, 0, 1), 3)[0] is None  # not observed yet
+    # New pod not Ready: the old pod still serves, so the fault has not reached traffic.
+    assert rollout_state(deploy(4, 4, 1, 2), 3)[0] is None
+    assert rollout_state(deploy(3, 3, 1, 1), 3)[0] is None  # the edit changed nothing

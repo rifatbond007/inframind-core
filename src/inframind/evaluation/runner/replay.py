@@ -148,6 +148,28 @@ def replay_signals(path: Path) -> list[Signal]:
     return signals
 
 
+#: More anomalies than this before the fault is an incident-sized burst, not noise. Clean
+#: dev recordings show 0-6 per 10 min baseline; an earlier fault inside one showed 60-308.
+PRE_FAULT_ANOMALY_LIMIT = 20
+
+
+def baseline_problem(trace: ReplayTrace) -> str | None:
+    """Why a recording's baseline cannot be scored, or None when it can.
+
+    Two cases: an incident still open when the fault starts (it would absorb the fault and
+    report its earlier start as the detection), or an incident-sized burst of anomalies
+    before the fault (an earlier fault, which also skews the detectors' baselines). Single
+    noise anomalies that resolve before the fault are neither; they are false alarms.
+    """
+    onset = trace.onset_ts
+    if any(i.opened_at < onset for i in trace.incidents):
+        return "an incident was already open when the fault started"
+    found = pre_fault_anomalies(trace.signals, onset)
+    if found > PRE_FAULT_ANOMALY_LIMIT:
+        return f"{found} anomalies before the fault (limit {PRE_FAULT_ANOMALY_LIMIT})"
+    return None
+
+
 def pre_fault_anomalies(signals: Sequence[Signal], onset_ts: datetime) -> int:
     """Anomalies the default detectors raise on the signals before `onset_ts`.
 
@@ -184,6 +206,8 @@ class ReplayTrace:
     graph: ServiceGraph
     onset_ts: datetime
     incidents: list[Incident]
+    #: Incidents that opened and resolved before the fault (ordinary noise, not detection).
+    noise_incidents: list[Incident] = field(default_factory=list)
 
     @property
     def first_open(self) -> datetime:
@@ -250,7 +274,21 @@ def replay_trace(
         # Mirror the "attach_signal" path so Alertmanager signals are seen by the tracker.
         if signal.source.value == "alertmanager":
             tracker.attach_signal(signal)
-    return ReplayTrace(signals=signals, graph=graph, onset_ts=onset_ts, incidents=incidents)
+    # Judge each incident by its LATEST snapshot: every first snapshot is `open`, so "any
+    # snapshot open" would keep a blip that resolved minutes before the fault.
+    latest: dict[str, Incident] = {}
+    for incident in incidents:
+        latest[incident.id] = incident
+    live = {
+        iid for iid, last in latest.items() if last.closed_at is None or last.closed_at >= onset_ts
+    }
+    return ReplayTrace(
+        signals=signals,
+        graph=graph,
+        onset_ts=onset_ts,
+        incidents=[i for i in incidents if i.id in live],
+        noise_incidents=[i for i in incidents if i.id not in live],
+    )
 
 
 def compute_fault_window(onset_ts: datetime, duration_s: float) -> tuple[datetime, datetime]:
@@ -397,6 +435,7 @@ def make_run_id(*, spec: ScenarioSpec, seed: int, repeat: int, method: str) -> s
 
 
 __all__ = [
+    "PRE_FAULT_ANOMALY_LIMIT",
     "SIGNALS_GZ",
     "OnLLMSummary",
     "ReplayError",
@@ -404,6 +443,7 @@ __all__ = [
     "ReplayResult",
     "ReplayTrace",
     "Scorer",
+    "baseline_problem",
     "compute_fault_window",
     "has_signals",
     "load_graph_snapshot",

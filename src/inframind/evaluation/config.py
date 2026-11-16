@@ -42,7 +42,7 @@ class EvalParams:
     chaos_namespace: str = "chaos-testing"
     # How long the recorder waits for proof that the fault took effect (Chaos Mesh
     # `AllInjected`, or a new Deployment generation observed) before it gives up.
-    inject_timeout_s: float = 60.0
+    inject_timeout_s: float = 180.0
     inject_poll_s: float = 2.0
 
     # Open-blocked scenarios anyway (used for fixture recording before live runs exist).

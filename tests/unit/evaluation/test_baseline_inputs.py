@@ -157,3 +157,54 @@ def test_pagerank_runs_on_the_incident_and_nothing_without_one() -> None:
         spec=spec, seed=1, repeat=0, baseline_input=_baseline_input_from_trace(quiet), trace=quiet
     )
     assert next(r for r in rows if r.method == "pagerank").detected is False
+
+
+def _noise_incident(opened_s: float, closed_s: float | None) -> Incident:
+    inc = _incident()
+    return inc.model_copy(
+        update={
+            "id": f"noise-{opened_s}",
+            "opened_at": T0 + timedelta(seconds=opened_s),
+            "updated_at": T0 + timedelta(seconds=closed_s if closed_s is not None else 30),
+            "closed_at": T0 + timedelta(seconds=closed_s) if closed_s is not None else None,
+            "state": "resolved" if closed_s is not None else "open",
+        }
+    )
+
+
+def test_a_noise_incident_resolved_before_the_fault_is_not_a_detection() -> None:
+    """dev-02's no-fault repeats: one frontend blip at -561 s resolved long before onset."""
+    from inframind.evaluation.runner.replay import baseline_problem
+
+    noise = _noise_incident(-561, -400)
+    trace = ReplayTrace(
+        signals=_trace().signals,
+        graph=_graph(),
+        onset_ts=T0,
+        incidents=[_incident()],
+        noise_incidents=[noise],
+    )
+    assert baseline_problem(trace) is None
+    assert trace.first_open == T0  # the noise did not become a 0 s "detection"
+
+
+def test_an_incident_open_when_the_fault_starts_makes_the_baseline_dirty() -> None:
+    from inframind.evaluation.runner.replay import baseline_problem
+
+    still_open = _noise_incident(-120, None)
+    trace = ReplayTrace(
+        signals=_trace().signals, graph=_graph(), onset_ts=T0, incidents=[still_open]
+    )
+    assert baseline_problem(trace) == "an incident was already open when the fault started"
+
+
+def test_an_incident_sized_burst_before_the_fault_makes_the_baseline_dirty() -> None:
+    from inframind.evaluation.runner.replay import PRE_FAULT_ANOMALY_LIMIT, baseline_problem
+
+    burst = [
+        _sig("frontend", -300 + i * 0.1, Source.LOKI, message="earlier fault") for i in range(60)
+    ]
+    signals = sorted(_trace().signals + burst, key=lambda s: (s.ts, s.id))
+    trace = ReplayTrace(signals=signals, graph=_graph(), onset_ts=T0, incidents=[_incident()])
+    problem = baseline_problem(trace)
+    assert problem is not None and f"limit {PRE_FAULT_ANOMALY_LIMIT}" in problem

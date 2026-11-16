@@ -307,12 +307,24 @@ def chaos_injection_state(obj: Mapping[str, Any]) -> tuple[bool | None, str]:
 
 
 def rollout_state(obj: Mapping[str, Any], before: int) -> tuple[bool | None, str]:
-    """A Deployment edit took effect once a new generation exists and is observed."""
+    """A Deployment edit took effect once only new pods are left to serve traffic.
+
+    A new, observed generation is not enough: with a rolling update, a new pod that never
+    becomes Ready leaves the old pod serving and the fault never reaches traffic. So the
+    updated replicas must equal the desired count and be the only replicas left.
+    """
     generation = int((obj.get("metadata") or {}).get("generation", 0))
-    observed = int((obj.get("status") or {}).get("observedGeneration", 0))
-    if generation > before and observed >= generation:
+    status = obj.get("status") or {}
+    observed = int(status.get("observedGeneration", 0))
+    desired = int((obj.get("spec") or {}).get("replicas", 1))
+    updated = int(status.get("updatedReplicas", 0))
+    total = int(status.get("replicas", 0))
+    if generation > before and observed >= generation and updated == desired == total:
         return True, ""
-    return None, f"generation {generation} (before {before}), observed {observed}"
+    return None, (
+        f"generation {generation} (before {before}), observed {observed}, "
+        f"updated {updated}/{desired}, total {total}"
+    )
 
 
 def _ms(ts: datetime) -> int:

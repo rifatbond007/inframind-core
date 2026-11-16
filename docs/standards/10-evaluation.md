@@ -80,6 +80,16 @@ repeat)` is the only path builder. A missing repeat is logged (`fixture_missing`
 produces no row, so the report's coverage shows the gap instead of reusing `r0`.
 Hand-written fixtures for tests live in `tests/fixtures/eval/` and are never evaluated.
 
+**Which incidents count, and which recordings are scored.** `replay_trace` judges each
+incident by its latest snapshot: one that resolved before the fault is noise
+(`noise_incidents`), never a detection, so a pre-fault blip cannot become a 0 s latency.
+`baseline_problem` refuses a live recording only when an incident is still open at the
+fault (it would absorb the fault) or more than `PRE_FAULT_ANOMALY_LIMIT` (20) anomalies
+precede it (an earlier fault). Clean baselines show 0-6 anomalies per 10 min; an earlier
+fault inside one showed 60-308. A config change is confirmed only when the updated replicas
+are the only ones left (`rollout_state`): a new pod that never becomes Ready leaves the old
+one serving and the fault never reaches traffic.
+
 ## 10.3 Scenarios — 18 YAMLs across the sacred split
 
 `evaluation/scenarios/dev/` (10 files, tuning) and `evaluation/scenarios/test/` (8 files,
@@ -150,6 +160,7 @@ you meant to run that never loaded is worse than a crash.
 | dev-08 | pod-kill, recommendationservice | PodChaos | runnable |
 | dev-09 | pod-failure, currencyservice | PodChaos | runnable |
 | dev-10 | `EXTRA_LATENCY=1s` rollout, productcatalogservice | none (`config_change`) | runnable |
+| dev-11 | bad `PRODUCT_CATALOG_SERVICE_ADDR` rollout, frontend (caller bug) | none (`config_change`) | runnable |
 | test-01 | pod-kill, checkoutservice | PodChaos | runnable |
 | test-02 | container-kill, cartservice | PodChaos | blocked — D2-Chaos-runtime (daemon) |
 | test-03 | pod-failure, paymentservice | PodChaos | runnable |
@@ -158,12 +169,13 @@ you meant to run that never loaded is worse than a crash.
 | test-06 | bad `REDIS_ADDR` rollout, cartservice | none (`config_change`) | runnable |
 | test-07 | container-kill, emailservice | PodChaos | runnable |
 | test-08 | bad `PRODUCT_CATALOG_SERVICE_ADDR` rollout, recommendationservice | none (`config_change`) | runnable |
+| test-09 | pod-failure, productcatalogservice | PodChaos | runnable |
 
 No `(fault_type, target_service)` pair appears in both splits
-(`test_no_fault_appears_in_both_splits`). **10 of the 18 are runnable**: D26 blocks the
-six Stress/NetworkChaos scenarios and both `container-kill` scenarios (the Chaos Mesh daemon
-path; refused live on 2026-11-16). That is below D6's 12 until two replacements are approved;
-`test_d6_has_at_least_twelve_runnable_scenarios` is a strict xfail until then.
+(`test_no_fault_appears_in_both_splits`). **12 of the 20 are runnable** (6 dev + 6 test), meeting
+D6: D26 blocks the six Stress/NetworkChaos scenarios and both `container-kill` scenarios (the
+Chaos Mesh daemon path, refused live on 2026-11-16); dev-11 (a bad frontend rollout, the live
+D30 caller-bug check) and test-09 (`pod-failure` on productcatalogservice) replace them.
 
 The blocked files carry `# block_status: d2_chaos_runtime_docker` and
 `status: blocked`. The runner **refuses** them by default (exit code 3, message in
