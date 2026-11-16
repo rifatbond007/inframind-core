@@ -1,0 +1,33 @@
+# Test split scenario 03 — PodChaos pod-failure on paymentservice.
+# Replaces the earlier "node-cordon" draft: Chaos Mesh has no node-cordon action, and
+# cordoning the only worker of the slim kind profile takes down every service at once.
+# pod-failure keeps the pod object but makes it unavailable for the whole duration,
+# a failure mode no dev scenario uses, on a service no other runnable scenario targets.
+# paymentservice emits no traces of its own; its failure surfaces in checkoutservice spans.
+scenario_id: test-podchaos-03-paymentservice-pod-failure
+set: test
+seed: 2003
+fault_type: pod_failure
+target_service: paymentservice
+target_namespace: default
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: paymentservice
+expected_affected_services:
+  - paymentservice
+  - checkoutservice
+  - frontend
+chaos:
+  kind: PodChaos
+  spec:
+    action: pod-failure
+    mode: all
+    selector:
+      label: app
+      value: paymentservice
+metrics_to_assert:
+  - cpu_cores
+  - span_latency
+repeats: 5
+status: runnable

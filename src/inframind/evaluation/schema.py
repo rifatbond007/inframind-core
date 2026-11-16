@@ -30,20 +30,28 @@ MethodKind = Literal["infra", "baseline", "ablation"]
 
 @dataclass(frozen=True, slots=True)
 class ChaosSpec:
-    """The Chaos Mesh resource a scenario injects. `kind` empty means no chaos at all."""
+    """The Chaos Mesh resource a scenario injects. `kind` empty means no chaos at all.
+
+    `params` holds every other key of the YAML `spec:` block verbatim (`containerNames`,
+    `stressors`, `delay`, `direction`, ...), so the live runner can build the full CR.
+    """
 
     kind: str = ""
     action: str = ""
     mode: str = ""
     selector: dict[str, str] = field(default_factory=dict)
+    params: dict[str, Any] = field(default_factory=dict)
 
     def to_yaml(self) -> dict[str, Any]:
         """Return the nested mapping a `chaos:` block would hold."""
         if not self.kind:
             return {}
-        spec: dict[str, Any] = {"action": self.action, "mode": self.mode}
+        spec: dict[str, Any] = {"mode": self.mode}
+        if self.action:
+            spec = {"action": self.action, **spec}
         if self.selector:
             spec["selector"] = dict(self.selector)
+        spec.update(self.params)
         return {"kind": self.kind, "spec": spec}
 
 
@@ -67,6 +75,8 @@ class ScenarioSpec:
     repeats: int
     status: Literal["runnable", "blocked"] = "runnable"
     block_reason: str = ""
+    #: A non-chaos fault (a Deployment edit), e.g. ``{"resource": "deployment/x", "env": {...}}``.
+    config_change: dict[str, Any] = field(default_factory=dict)
 
     @property
     def is_blocked(self) -> bool:

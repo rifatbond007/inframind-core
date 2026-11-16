@@ -1,0 +1,36 @@
+# block_status: d2_chaos_runtime_docker
+#
+# Dev split scenario 06 — NetworkChaos delay on emailservice.
+# StressChaos has no latency action; latency is injected with NetworkChaos `delay`.
+# BLOCKED: NetworkChaos needs the same runtime resolution as StressChaos (D2-Chaos-runtime). Note emailservice emits no
+# traces, so even once unblocked this is a metrics-only scenario.
+scenario_id: dev-networkchaos-06-emailservice-latency
+set: dev
+seed: 1006
+fault_type: network_latency
+target_service: emailservice
+target_namespace: default
+duration_s: 240
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: emailservice
+expected_affected_services:
+  - emailservice
+  - checkoutservice
+  - frontend
+chaos:
+  kind: NetworkChaos
+  spec:
+    action: delay
+    mode: all
+    selector:
+      label: app
+      value: emailservice
+    delay:
+      latency: 500ms
+      jitter: 50ms
+metrics_to_assert:
+  - span_latency
+repeats: 5
+status: blocked
+block_reason: d2_chaos_runtime_docker

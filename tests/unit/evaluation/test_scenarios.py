@@ -18,6 +18,12 @@ from inframind.evaluation.scenarios import (
     runnable,
 )
 
+#: A valid chaos block aimed at the placeholder service `svc`.
+_POD_KILL = {
+    "kind": "PodChaos",
+    "spec": {"action": "pod-kill", "mode": "one", "selector": {"label": "app", "value": "svc"}},
+}
+
 
 def test_parse_scenario_minimal_round_trip() -> None:
     """A complete, runnable scenario parses into a `ScenarioSpec`."""
@@ -33,6 +39,7 @@ def test_parse_scenario_minimal_round_trip() -> None:
         "cooldown_s": 10.0,
         "expected_root_cause": "svc",
         "expected_affected_services": ["svc"],
+        "chaos": _POD_KILL,
         "metrics_to_assert": ["http_requests_total"],
         "repeats": 5,
     }
@@ -186,6 +193,7 @@ def _minimal(scenario_id: str) -> dict:
         "cooldown_s": 10.0,
         "expected_root_cause": "svc",
         "expected_affected_services": ["svc"],
+        "chaos": _POD_KILL,
         "metrics_to_assert": ["http_requests_total"],
         "repeats": 5,
     }
@@ -227,3 +235,133 @@ def test_load_scenario_file_rejects_missing_keys(tmp_path: Path) -> None:
     yaml_path.write_text("scenario_id: x\nset: dev\n")  # most fields missing
     with pytest.raises(ScenarioError, match="missing required key"):
         load_scenario_file(yaml_path)
+
+
+# --- Fault validity: the loader rejects a fault Chaos Mesh cannot apply -----------------
+
+
+def _with_chaos(kind: str, **spec: object) -> dict:
+    """A minimal scenario whose chaos block is `kind` + `spec` (selector defaults to svc)."""
+    raw = _minimal("fault-check")
+    raw["chaos"] = {
+        "kind": kind,
+        "spec": {"mode": "one", "selector": {"label": "app", "value": "svc"}, **spec},
+    }
+    return raw
+
+
+@pytest.mark.parametrize(
+    ("raw", "message"),
+    [
+        (_with_chaos("PodChaos", action="container-exit"), "has no action 'container-exit'"),
+        (_with_chaos("PodChaos", action="node-cordon"), "has no action 'node-cordon'"),
+        (_with_chaos("StressChaos", action="stress-latency"), "has no action 'stress-latency'"),
+        (_with_chaos("StressChaos"), "needs a `stressors` block"),
+        (_with_chaos("PodChaos", action="container-kill"), "needs `containerNames`"),
+        (_with_chaos("IOChaos", action="latency"), "unsupported chaos kind"),
+        (
+            _with_chaos("PodChaos", action="pod-kill", selector={"label": "app", "value": "x"}),
+            "does not match target_service",
+        ),
+    ],
+)
+def test_parse_scenario_rejects_an_unappliable_fault(raw: dict, message: str) -> None:
+    """Every invalid shape the first scenario draft used is now a load error."""
+    with pytest.raises(ScenarioError, match=message):
+        parse_scenario(raw, source="inline")
+
+
+def test_parse_scenario_rejects_a_scenario_that_injects_nothing() -> None:
+    """No `chaos` and no `config_change` means the run would measure a quiet cluster."""
+    raw = _minimal("no-fault")
+    del raw["chaos"]
+    with pytest.raises(ScenarioError, match="no `chaos` block and no `config_change`"):
+        parse_scenario(raw, source="inline")
+
+
+def test_parse_scenario_keeps_extra_chaos_keys_and_config_change() -> None:
+    """Chaos keys beyond action/mode/selector survive the round trip for the live runner."""
+    raw = _with_chaos("StressChaos", stressors={"cpu": {"workers": 2, "load": 80}})
+    spec = parse_scenario(raw, source="inline")
+    assert spec.chaos.params == {"stressors": {"cpu": {"workers": 2, "load": 80}}}
+    assert "action" not in spec.chaos.to_yaml()["spec"]
+    assert spec.chaos.to_yaml()["spec"]["stressors"]["cpu"]["load"] == 80
+
+    raw = _minimal("config")
+    del raw["chaos"]
+    raw["config_change"] = {"resource": "deployment/svc", "env": {"K": "V"}}
+    assert parse_scenario(raw, source="inline").config_change["resource"] == "deployment/svc"
+
+
+# --- Ground truth: every committed scenario matches the real Online Boutique testbed ------
+
+_BOUTIQUE = Path(__file__).resolve().parents[3] / "testbed" / "boutique"
+
+
+def _boutique_call_graph() -> dict[str, set[str]]:
+    """Return `{caller: {callee, ...}}` from the vendored Boutique manifests.
+
+    Boutique wires each call through an env var `<callee>:<port>`, so the callees of a
+    Deployment are the env values whose host is another Boutique Service.
+    """
+    import yaml
+
+    services: set[str] = set()
+    env_hosts: dict[str, set[str]] = {}
+    for path in sorted((_BOUTIQUE / "base").glob("*.yaml")):
+        for doc in yaml.safe_load_all(path.read_text()):
+            if not isinstance(doc, dict):
+                continue
+            name = doc.get("metadata", {}).get("name", "")
+            if doc.get("kind") == "Service":
+                services.add(name)
+            if doc.get("kind") == "Deployment":
+                hosts = env_hosts.setdefault(name, set())
+                for container in doc["spec"]["template"]["spec"]["containers"]:
+                    for env in container.get("env", []):
+                        value = str(env.get("value", ""))
+                        if ":" in value:
+                            hosts.add(value.split(":", 1)[0])
+    return {caller: hosts & services for caller, hosts in env_hosts.items()}
+
+
+def _callers_of(service: str, graph: dict[str, set[str]]) -> set[str]:
+    """Every service that reaches `service` through one or more calls (D2: callee -> caller)."""
+    found: set[str] = set()
+    frontier = {service}
+    while frontier:
+        nxt = {c for c, callees in graph.items() if callees & frontier} - found - {service}
+        found |= nxt
+        frontier = nxt
+    return found
+
+
+def test_scenarios_match_the_online_boutique_testbed(repo_paths: tuple[Path, Path]) -> None:
+    """Names, namespace and expected blast radius come from the real Boutique call graph.
+
+    Guards against the first draft's Sock Shop names (`front-end`, `checkout`,
+    `payment-service`), whose chaos selectors matched no pod on the testbed.
+    """
+    import yaml
+
+    scenarios_root, _ = repo_paths
+    graph = _boutique_call_graph()
+    graph.pop("loadgenerator", None)  # the traffic driver, not an instrumented service
+    kustomization = yaml.safe_load((_BOUTIQUE / "kustomization.yaml").read_text())
+    namespace = kustomization["namespace"]
+
+    for spec in load_set("dev", root=scenarios_root) + load_set("test", root=scenarios_root):
+        sid = spec.scenario_id
+        assert spec.target_service in graph, f"{sid}: {spec.target_service} is not in Boutique"
+        assert spec.target_namespace == namespace, f"{sid}: wrong namespace"
+        assert spec.expected_root_cause == spec.target_service, f"{sid}: root != target"
+        expected = {spec.target_service} | _callers_of(spec.target_service, graph)
+        assert set(spec.expected_affected_services) == expected, sid
+
+
+def test_no_fault_appears_in_both_splits(repo_paths: tuple[Path, Path]) -> None:
+    """A (fault_type, target_service) pair in both dev and test leaks tuning into scoring."""
+    scenarios_root, _ = repo_paths
+    dev = {(s.fault_type, s.target_service) for s in load_set("dev", root=scenarios_root)}
+    test = {(s.fault_type, s.target_service) for s in load_set("test", root=scenarios_root)}
+    assert dev.isdisjoint(test), sorted(dev & test)

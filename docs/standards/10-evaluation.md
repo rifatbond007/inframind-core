@@ -74,21 +74,35 @@ set: dev
 seed: 1001
 fault_type: pod_kill
 target_service: cartservice
-target_namespace: boutique
+target_namespace: default
 duration_s: 180
 warmup_s: 60
 cooldown_s: 60
 expected_root_cause: cartservice
-expected_affected_services: [cartservice, front-end, checkout]
+expected_affected_services: [cartservice, checkoutservice, frontend]
 chaos:
   kind: PodChaos
   spec: {action: pod-kill, mode: one, selector: {label: app, value: cartservice}}
-metrics_to_assert: [http_requests_total, http_request_duration_seconds_bucket]
+metrics_to_assert: [container_restarts_total, cpu_cores, span_latency]
 repeats: 5
 ```
 
-`chaos` may be omitted (e.g. the config-change test scenario uses a real `ConfigMap`
-edit, not a chaos CR). `ScenarioSpec.is_blocked` returns `True` when `status: blocked`
+Service names, the namespace and `expected_affected_services` are Online Boutique's
+(`testbed/boutique/`): the affected set is the target plus every service that reaches it
+through calls, taken from the manifests' `<callee>:<port>` env vars.
+`test_scenarios_match_the_online_boutique_testbed` derives that call graph and fails on any
+mismatch. `metrics_to_assert` uses the logical metric names the collectors emit
+(`cpu_cores`, `memory_working_set_bytes`, `container_restarts_total`, and the Jaeger
+collector's `span_latency`).
+
+Every key of `chaos.spec` other than `action`/`mode`/`selector` (`containerNames`,
+`stressors`, `delay`, `direction`) is kept in `ChaosSpec.params` for the live runner. The
+loader rejects a fault Chaos Mesh cannot apply (`scenarios.CHAOS_ACTIONS`): PodChaos takes
+`pod-kill`/`pod-failure`/`container-kill` (the last needs `containerNames`), StressChaos
+takes no `action` and needs `stressors`, and the selector must name `target_service`.
+
+`chaos` may be omitted only when a `config_change` block describes the fault instead (the
+test-06 Deployment edit); a scenario with neither is a load error. `ScenarioSpec.is_blocked` returns `True` when `status: blocked`
 or `block_status: <reason>` is present in the file, and `fixture_dirname` is the
 canonical subdirectory of `evaluation/fixtures/`.
 
@@ -109,14 +123,23 @@ you meant to run that never loaded is worse than a crash.
 
 | Scenario | Fault | Chaos | Status |
 |---|---|---|---|
-| dev-01..03 | pod-kill / container-exit / cpu-stress | PodChaos | runnable |
-| dev-04..05 | cpu-stress / memory-stress | StressChaos | blocked — D2-Chaos-runtime |
-| dev-06 | latency-inject | StressChaos | blocked — D2-Chaos-runtime |
-| dev-07 | network-partition | NetworkChaos | blocked — D2-Chaos-runtime |
-| test-01..03 | pod-kill / container-exit / node-cordon | PodChaos | runnable |
-| test-04 | cpu-stress | StressChaos | blocked — D2-Chaos-runtime |
-| test-05 | network-latency | NetworkChaos | blocked — D2-Chaos-runtime |
-| test-06 | config-change (`kubectl set env`/ConfigMap) | none | runnable |
+| dev-01 | pod-kill, cartservice | PodChaos | runnable |
+| dev-02 | container-kill, shippingservice | PodChaos | runnable |
+| dev-03 | pod-kill, productcatalogservice | PodChaos | runnable |
+| dev-04 | cpu-stress, cartservice | StressChaos | blocked — D2-Chaos-runtime |
+| dev-05 | memory-stress, paymentservice | StressChaos | blocked — D2-Chaos-runtime |
+| dev-06 | network delay, emailservice | NetworkChaos | blocked — D2-Chaos-runtime |
+| dev-07 | network partition, cartservice | NetworkChaos | blocked — D2-Chaos-runtime |
+| dev-08 | pod-kill, recommendationservice | PodChaos | runnable |
+| test-01 | pod-kill, checkoutservice | PodChaos | runnable |
+| test-02 | container-kill, cartservice | PodChaos | runnable |
+| test-03 | pod-failure, paymentservice | PodChaos | runnable |
+| test-04 | cpu-stress, currencyservice | StressChaos | blocked — D2-Chaos-runtime |
+| test-05 | network delay, checkoutservice | NetworkChaos | blocked — D2-Chaos-runtime |
+| test-06 | bad `REDIS_ADDR` rollout, cartservice | none (`config_change`) | runnable |
+
+No `(fault_type, target_service)` pair appears in both splits
+(`test_no_fault_appears_in_both_splits`). 8 of the 14 are runnable today; D6 needs 12.
 
 The blocked files carry `# block_status: d2_chaos_runtime_docker` and
 `status: blocked`. The runner **refuses** them by default (exit code 3, message in

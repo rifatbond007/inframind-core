@@ -7,8 +7,10 @@ Two invariants the loader exists to enforce:
   denominator without anyone noticing.
 * **The dev/test split is sacred** (D6). `load_set("dev")` refuses a file declaring
   `set: test` and vice versa. The split is not a convention; it is a check.
-* **`chaos` is optional.** The one test scenario that changes a ConfigMap injects no chaos
-  at all; forcing an empty `chaos:` block on it would be noise, not clarity.
+* **`chaos` is optional.** The one test scenario that edits a Deployment injects no chaos
+  and carries a `config_change` block instead; a scenario with neither is a load error.
+* **The fault must be one Chaos Mesh can apply** (`CHAOS_ACTIONS`), aimed at
+  `target_service`.
 
 Blocked scenarios (D2-Chaos-runtime) load normally and carry `status: blocked`. The runner
 refuses to score them unless `allow_blocked`, and when allowed it writes rows marked
@@ -38,6 +40,16 @@ DEFAULT_SCENARIO_ROOT = REPO_ROOT / "evaluation" / "scenarios"
 
 #: The block reason pinned for the 4 scenarios D2-Chaos-runtime makes unrunnable.
 BLOCKED_REASON = "d2_chaos_runtime_docker"
+
+#: Chaos Mesh actions per kind. StressChaos has no `action`: its `stressors` block is the fault.
+CHAOS_ACTIONS: dict[str, frozenset[str]] = {
+    "PodChaos": frozenset({"pod-kill", "pod-failure", "container-kill"}),
+    "NetworkChaos": frozenset({"delay", "loss", "duplicate", "corrupt", "partition", "bandwidth"}),
+    "StressChaos": frozenset({""}),
+}
+
+#: Keys of a `chaos.spec` block that `ChaosSpec` models as fields, not as `params`.
+_CHAOS_FIELDS = frozenset({"action", "mode", "selector"})
 
 _REQUIRED = (
     "scenario_id",
@@ -105,11 +117,13 @@ def parse_scenario(raw: dict[str, Any], *, source: str) -> ScenarioSpec:
                 action=str(spec_inner.get("action", "")),
                 mode=str(spec_inner.get("mode", "")),
                 selector={str(k): str(v) for k, v in selector.items()},
+                params={str(k): v for k, v in spec_inner.items() if k not in _CHAOS_FIELDS},
             ),
             metrics_to_assert=tuple(raw["metrics_to_assert"]),
             repeats=int(raw["repeats"]),
             status=status,
             block_reason=str(raw.get("block_reason", "")),
+            config_change=dict(raw.get("config_change") or {}),
         )
     except (TypeError, ValueError) as e:
         raise ScenarioError(f"{source}: field type error: {e}") from e
@@ -118,7 +132,34 @@ def parse_scenario(raw: dict[str, Any], *, source: str) -> ScenarioSpec:
         raise ScenarioError(f"{source}: repeats must be ≥5 per D6, got {spec.repeats}")
     if spec.is_blocked and not spec.block_reason:
         raise ScenarioError(f"{source}: a blocked scenario must declare block_reason")
+    _check_fault(spec, source=source)
     return spec
+
+
+def _check_fault(spec: ScenarioSpec, *, source: str) -> None:
+    """Reject a fault Chaos Mesh cannot apply, or a scenario that injects nothing at all."""
+    chaos = spec.chaos
+    if not chaos.kind:
+        if not spec.config_change:
+            raise ScenarioError(f"{source}: no `chaos` block and no `config_change` block")
+        return
+    actions = CHAOS_ACTIONS.get(chaos.kind)
+    if actions is None:
+        raise ScenarioError(f"{source}: unsupported chaos kind {chaos.kind!r}")
+    if chaos.action not in actions:
+        expected = sorted(a for a in actions if a) or ["(none: use stressors)"]
+        raise ScenarioError(
+            f"{source}: {chaos.kind} has no action {chaos.action!r}; expected one of {expected}"
+        )
+    if chaos.kind == "StressChaos" and not chaos.params.get("stressors"):
+        raise ScenarioError(f"{source}: StressChaos needs a `stressors` block")
+    if chaos.action == "container-kill" and not chaos.params.get("containerNames"):
+        raise ScenarioError(f"{source}: container-kill needs `containerNames`")
+    if chaos.selector.get("value") != spec.target_service:
+        raise ScenarioError(
+            f"{source}: selector value {chaos.selector.get('value')!r} does not match "
+            f"target_service {spec.target_service!r}"
+        )
 
 
 def load_scenario_file(path: Path) -> ScenarioSpec:
