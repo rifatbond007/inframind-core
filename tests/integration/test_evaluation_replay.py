@@ -192,8 +192,13 @@ def test_runner_main_dry_run_lists_scenarios(
     assert not (tmp_path / "phase7").exists(), "--dry-run must not write results"
 
 
-def test_blocked_scenarios_are_all_stress_or_network_chaos() -> None:
-    """Every blocked scenario needs StressChaos or NetworkChaos — the D2-Chaos-runtime set."""
+def test_blocked_scenarios_all_need_the_chaos_daemon() -> None:
+    """Every blocked scenario needs the Chaos Mesh daemon (D2-Chaos-runtime): Stress or
+    NetworkChaos, or PodChaos container-kill. pod-kill/pod-failure use the API and run."""
     all_blocked = blocked(load_set("dev")) + blocked(load_set("test"))
-    assert all(s.chaos.kind in ("StressChaos", "NetworkChaos") for s in all_blocked)
+    assert all(
+        s.chaos.kind in ("StressChaos", "NetworkChaos") or s.chaos.action == "container-kill"
+        for s in all_blocked
+    )
+    assert not any(s.chaos.action == "container-kill" for s in runnable(load_set("dev")))
     assert all(s.block_reason == "d2_chaos_runtime_docker" for s in all_blocked)

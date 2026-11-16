@@ -134,23 +134,28 @@ def test_load_dev_and_test_sets_are_disjoint(repo_paths: tuple[Path, Path]) -> N
 
 
 def test_dev_set_is_ten_scenarios(repo_paths: tuple[Path, Path]) -> None:
-    """Dev: 6 runnable (PodChaos + config changes) + 4 blocked on D2-Chaos-runtime."""
+    """Dev: 5 runnable (pod-kill, pod-failure, config) + 5 blocked on D2-Chaos-runtime."""
     _scenarios_root, _fixtures = repo_paths
     dev = load_set("dev")
     assert len(dev) == 10, f"expected 10 dev scenarios, got {len(dev)}"
-    assert len(runnable(dev)) == 6, "expected 6 runnable dev scenarios"
-    assert len(blocked(dev)) == 4, "expected 4 blocked dev scenarios"
+    assert len(runnable(dev)) == 5, "expected 5 runnable dev scenarios"
+    assert len(blocked(dev)) == 5, "expected 5 blocked dev scenarios"
 
 
 def test_test_set_is_eight_scenarios(repo_paths: tuple[Path, Path]) -> None:
-    """Test: 6 runnable + 2 blocked on D2-Chaos-runtime."""
+    """Test: 5 runnable + 3 blocked on D2-Chaos-runtime."""
     _scenarios_root, _fixtures = repo_paths
     test = load_set("test")
     assert len(test) == 8, f"expected 8 test scenarios, got {len(test)}"
-    assert len(runnable(test)) == 6
-    assert len(blocked(test)) == 2
+    assert len(runnable(test)) == 5
+    assert len(blocked(test)) == 3
 
 
+@pytest.mark.xfail(
+    strict=True,
+    reason="D6 gap: container-kill is blocked by D26 (10 runnable); two replacement "
+    "scenarios await approval. strict: this starts failing once they land, so remove it.",
+)
 def test_d6_has_at_least_twelve_runnable_scenarios(repo_paths: tuple[Path, Path]) -> None:
     """D6 needs >=12 distinct scenarios that can actually run while D26 blocks 6 of them."""
     scenarios_root, _ = repo_paths
@@ -167,8 +172,8 @@ def test_blocked_scenarios_all_carry_d2_chaos_runtime_docker(repo_paths: tuple[P
     blocked_test = blocked(load_set("test"))
     all_blocked = blocked_dev + blocked_test
     assert all(s.block_reason == BLOCKED_REASON for s in all_blocked)
-    # The plan encoded exactly 6 blocked scenarios (4 dev + 2 test).
-    assert len(all_blocked) == 6
+    # 6 Stress/NetworkChaos + 2 container-kill (refused by the runtime live, 2026-11-16).
+    assert len(all_blocked) == 8
 
 
 def test_assert_disjoint_raises_on_overlap() -> None:

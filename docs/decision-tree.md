@@ -131,11 +131,20 @@ inject against the containerd node — they raise `expected docker:// but got co
   spec.
 - Score blocked scenarios as zero today: rejected (PUKU.md: never invent a number).
 
+**Amendment (2026-11-16): PodChaos `container-kill` is blocked too.** It runs through the
+Chaos Mesh daemon like Stress/NetworkChaos. Live, all five dev-02 repeats were accepted by
+the API server (and a server-side dry run passed) but the CR reported
+`AllInjected=False` / `expected docker:// but got containerd://`, and the recordings held no
+fault. dev-02 and test-02 are now `status: blocked`; runnable scenarios drop to 10, below
+D6's 12, until two replacements are approved. `pod-kill` and `pod-failure` go through the
+Kubernetes API and were verified to inject the same day. The recorder now refuses to record
+a fault it cannot confirm (`AllInjected=True`, or a new observed Deployment generation).
+
 **Trigger to revisit:** D2-Chaos-runtime is approved and `make smoke-testbed` confirms
 all six blocked scenarios now replay end-to-end. The harness then drops the
 `d2_chaos_runtime_docker` block reason from those files and the 6 become runnable.
 
-**Cross-ref:** `docs/standards/10-evaluation.md` §10.3; `tests/integration/test_evaluation_replay.py::test_blocked_scenarios_are_all_stress_or_network_chaos`.
+**Cross-ref:** `docs/standards/10-evaluation.md` §10.3; `tests/integration/test_evaluation_replay.py::test_blocked_scenarios_all_need_the_chaos_daemon`.
 
 ## D9. LLM access is gated by redaction and a local fallback
 

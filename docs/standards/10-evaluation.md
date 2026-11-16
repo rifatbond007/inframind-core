@@ -141,7 +141,7 @@ you meant to run that never loaded is worse than a crash.
 | Scenario | Fault | Chaos | Status |
 |---|---|---|---|
 | dev-01 | pod-kill, cartservice | PodChaos | runnable |
-| dev-02 | container-kill, shippingservice | PodChaos | runnable |
+| dev-02 | container-kill, shippingservice | PodChaos | blocked — D2-Chaos-runtime (daemon) |
 | dev-03 | pod-kill, productcatalogservice | PodChaos | runnable |
 | dev-04 | cpu-stress, cartservice | StressChaos | blocked — D2-Chaos-runtime |
 | dev-05 | memory-stress, paymentservice | StressChaos | blocked — D2-Chaos-runtime |
@@ -151,7 +151,7 @@ you meant to run that never loaded is worse than a crash.
 | dev-09 | pod-failure, currencyservice | PodChaos | runnable |
 | dev-10 | `EXTRA_LATENCY=1s` rollout, productcatalogservice | none (`config_change`) | runnable |
 | test-01 | pod-kill, checkoutservice | PodChaos | runnable |
-| test-02 | container-kill, cartservice | PodChaos | runnable |
+| test-02 | container-kill, cartservice | PodChaos | blocked — D2-Chaos-runtime (daemon) |
 | test-03 | pod-failure, paymentservice | PodChaos | runnable |
 | test-04 | cpu-stress, currencyservice | StressChaos | blocked — D2-Chaos-runtime |
 | test-05 | network delay, checkoutservice | NetworkChaos | blocked — D2-Chaos-runtime |
@@ -160,10 +160,10 @@ you meant to run that never loaded is worse than a crash.
 | test-08 | bad `PRODUCT_CATALOG_SERVICE_ADDR` rollout, recommendationservice | none (`config_change`) | runnable |
 
 No `(fault_type, target_service)` pair appears in both splits
-(`test_no_fault_appears_in_both_splits`). 12 of the 18 are runnable while D26 blocks
-Stress/NetworkChaos, which meets D6's 12 (`test_d6_has_at_least_twelve_runnable_scenarios`).
-Every service except adservice and frontend is a root cause in at least one runnable
-scenario; dev-10 is the only runnable latency fault (the p95 latency-regression detector).
+(`test_no_fault_appears_in_both_splits`). **10 of the 18 are runnable**: D26 blocks the
+six Stress/NetworkChaos scenarios and both `container-kill` scenarios (the Chaos Mesh daemon
+path; refused live on 2026-11-16). That is below D6's 12 until two replacements are approved;
+`test_d6_has_at_least_twelve_runnable_scenarios` is a strict xfail until then.
 
 The blocked files carry `# block_status: d2_chaos_runtime_docker` and
 `status: blocked`. The runner **refuses** them by default (exit code 3, message in

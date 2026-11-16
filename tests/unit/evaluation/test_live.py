@@ -42,12 +42,74 @@ def _spec(scenario_id: str) -> ScenarioSpec:
     raise KeyError(scenario_id)
 
 
-class FakeKubectl:
-    """Records every argv; answers `current-context` with `context`."""
+#: Status of a real PodChaos on this kind cluster, captured 2026-11-16 (pod-failure probe).
+INJECTED = {
+    "status": {
+        "conditions": [
+            {"type": "Selected", "status": "True"},
+            {"type": "AllInjected", "status": "True"},
+            {"type": "AllRecovered", "status": "False"},
+        ],
+        "experiment": {
+            "containerRecords": [
+                {
+                    "id": "default/currencyservice-x",
+                    "phase": "Injected",
+                    "injectedCount": 1,
+                    "events": [{"type": "Succeeded", "operation": "Apply"}],
+                }
+            ]
+        },
+    }
+}
 
-    def __init__(self, context: str = "kind-inframind", fail_on: str | None = None) -> None:
+#: The real container-kill status on the same cluster: the runtime refused it (D26).
+RUNTIME_REFUSED = {
+    "status": {
+        "conditions": [
+            {"type": "Selected", "status": "True"},
+            {"type": "AllInjected", "status": "False"},
+            {"type": "AllRecovered", "status": "True"},
+        ],
+        "experiment": {
+            "containerRecords": [
+                {
+                    "id": "default/shippingservice-x/server",
+                    "phase": "Not Injected",
+                    "injectedCount": 0,
+                    "events": [
+                        {
+                            "type": "Failed",
+                            "operation": "Apply",
+                            "message": "rpc error: code = Unknown desc = expected docker:// "
+                            "but got containerd://abc",
+                        }
+                    ],
+                }
+            ]
+        },
+    }
+}
+
+
+class FakeKubectl:
+    """Records every argv; answers `current-context`, and `get -o json` with a status.
+
+    `chaos` is the JSON a `get <chaos kind>` returns (default: injected). `deploy` is the
+    sequence of `(generation, observedGeneration)` successive Deployment `get`s return.
+    """
+
+    def __init__(
+        self,
+        context: str = "kind-inframind",
+        fail_on: str | None = None,
+        chaos: dict | None = None,
+        deploy: list[tuple[int, int]] | None = None,
+    ) -> None:
         self.context = context
         self.fail_on = fail_on
+        self.chaos = INJECTED if chaos is None else chaos
+        self.deploy = list(deploy or [(3, 3), (4, 4)])
         self.calls: list[tuple[list[str], str | None]] = []
 
     def __call__(self, argv: Sequence[str], stdin: str | None) -> tuple[int, str, str]:
@@ -57,6 +119,12 @@ class FakeKubectl:
             return 0, self.context + "\n", ""
         if self.fail_on and self.fail_on in argv:
             return 1, "", "boom"
+        if "get" in argv and "json" in argv:
+            if any(a.startswith("deployment/") for a in argv):
+                gen, observed = self.deploy.pop(0) if len(self.deploy) > 1 else self.deploy[0]
+                body = {"metadata": {"generation": gen}, "status": {"observedGeneration": observed}}
+                return 0, json.dumps(body), ""
+            return 0, json.dumps(self.chaos), ""
         return 0, "", ""
 
     def verbs(self) -> list[str]:
@@ -239,7 +307,7 @@ def test_run_scenario_records_a_replayable_fixture(tmp_path: Path) -> None:
     )
 
     # The CR was applied as JSON on stdin, then deleted by name after the fault duration.
-    assert kubectl.verbs() == ["apply", "delete"]
+    assert kubectl.verbs() == ["apply", "get", "delete"]
     applied = json.loads(kubectl.calls[1][1] or "")
     assert applied["metadata"]["name"] == "eval-dev-podchaos-01-cartservice-pod-kill-r2"
     assert all("--context=kind-inframind" in argv for argv, _ in kubectl.calls[1:])
@@ -293,7 +361,7 @@ def test_run_scenario_reverts_the_fault_when_interrupted(tmp_path: Path) -> None
         runner.run_scenario(
             _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path / "r0"
         )
-    assert kubectl.verbs() == ["apply", "delete"]
+    assert kubectl.verbs() == ["apply", "get", "delete"]
     assert sorted(p.name for p in (tmp_path / "r0").iterdir()) == [FAULT_MARKER]  # no fixture
 
 
@@ -304,7 +372,7 @@ def test_run_scenario_applies_and_undoes_a_config_change(tmp_path: Path) -> None
     _runner(redis, FakeClock(T0), kubectl, tmp_path).run_scenario(
         _spec("test-config-06-cartservice-bad-redis-addr"), repeat=0, record_to=tmp_path / "r0"
     )
-    assert kubectl.verbs() == ["set", "rollout"]
+    assert kubectl.verbs() == ["get", "set", "get", "rollout"]
 
 
 def test_run_scenario_refuses_an_empty_bus(tmp_path: Path) -> None:
@@ -467,3 +535,59 @@ def test_compressed_signals_round_trip_byte_for_byte(tmp_path: Path) -> None:
     assert a.read_bytes() == b.read_bytes()
     assert [s.id for s in replay_signals(a)] == [s.id for s in signals]
     assert signals_file(tmp_path / "missing").name == "signals.ndjson"
+
+
+def test_a_fault_the_runtime_refuses_is_reverted_and_never_recorded(tmp_path: Path) -> None:
+    """The dev-02 case: apply is accepted, then Chaos Mesh reports the runtime refused it."""
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=600)
+    kubectl = FakeKubectl(chaos=RUNTIME_REFUSED)
+    runner = _runner(redis, FakeClock(T0), kubectl, tmp_path)
+    target = tmp_path / "r0"
+    with pytest.raises(LiveRunnerError, match="expected docker:// but got containerd"):
+        runner.run_scenario(
+            _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=target
+        )
+    assert kubectl.verbs() == ["apply", "get", "delete"]  # reverted at once
+    assert not (target / "signals.ndjson.gz").exists()
+
+
+def test_a_fault_never_confirmed_times_out_and_is_reverted(tmp_path: Path) -> None:
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=600)
+    pending = {"status": {"conditions": [{"type": "AllInjected", "status": "False"}]}}
+    kubectl = FakeKubectl(chaos=pending)
+    clock = FakeClock(T0)
+    runner = _runner(redis, clock, kubectl, tmp_path, inject_timeout_s=10.0, inject_poll_s=2.0)
+    with pytest.raises(LiveRunnerError, match="not confirmed in 10s"):
+        runner.run_scenario(
+            _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path / "r0"
+        )
+    assert kubectl.verbs()[-1] == "delete"
+    assert clock.slept == [2.0] * 5
+
+
+def test_a_config_change_that_creates_no_new_generation_is_reverted(tmp_path: Path) -> None:
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=600)
+    kubectl = FakeKubectl(deploy=[(3, 3)])  # the edit changed nothing
+    runner = _runner(redis, FakeClock(T0), kubectl, tmp_path, inject_timeout_s=4.0)
+    with pytest.raises(LiveRunnerError, match="did not take effect"):
+        runner.run_scenario(
+            _spec("test-config-06-cartservice-bad-redis-addr"), repeat=0, record_to=tmp_path / "r0"
+        )
+    assert kubectl.verbs()[-1] == "rollout"  # rollout undo
+
+
+def test_the_status_readers_on_real_shapes() -> None:
+    from inframind.evaluation.runner.live import chaos_injection_state, rollout_state
+
+    assert chaos_injection_state(INJECTED) == (True, "")
+    verdict, why = chaos_injection_state(RUNTIME_REFUSED)
+    assert verdict is False and "containerd" in why
+    assert chaos_injection_state({})[0] is None
+    assert rollout_state({"metadata": {"generation": 4}, "status": {"observedGeneration": 4}}, 3)[0]
+    assert (
+        rollout_state({"metadata": {"generation": 4}, "status": {"observedGeneration": 3}}, 3)[0]
+        is None
+    )

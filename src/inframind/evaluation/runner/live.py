@@ -15,7 +15,12 @@ One recording (`LiveRunner.run_scenario`):
    the incident opened before the fault and every later repeat scored a false 0 s
    latency.
 2. **Inject** at `onset_ts`: apply the Chaos Mesh CR built from `spec.chaos`
-   (`build_chaos_manifest`), or apply `spec.config_change` with `kubectl set env`.
+   (`build_chaos_manifest`), or apply `spec.config_change` with `kubectl set env`, then
+   **confirm it took effect**: the CR must reach `AllInjected=True` (a `Failed` record aborts
+   at once), or the Deployment must show a new, observed generation. An accepted apply is
+   not proof: on this kind runtime every `container-kill` was accepted and then failed
+   (`expected docker:// but got containerd://`), and five fault-free periods were recorded
+   as dev-02 before this check existed.
 3. **Hold** for `duration_s`, then **revert** (delete the CR / `kubectl rollout undo`). The
    revert runs in a `finally`, and every CR also carries a Chaos Mesh `duration`, so a
    crashed recorder cannot leave a fault behind.
@@ -41,7 +46,7 @@ import re
 import shutil
 import subprocess
 import time
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -86,12 +91,14 @@ __all__ = [
     "Recording",
     "WrongKubeContext",
     "build_chaos_manifest",
+    "chaos_injection_state",
     "chaos_resource_name",
     "config_change_commands",
     "latest_recording_end",
     "list_blocked_reasons",
     "read_graph",
     "read_signals",
+    "rollout_state",
 ]
 
 
@@ -282,6 +289,32 @@ def latest_recording_end(fixture_root: Path) -> datetime | None:
     return max(ends, default=None)
 
 
+def chaos_injection_state(obj: Mapping[str, Any]) -> tuple[bool | None, str]:
+    """Read a Chaos Mesh CR: `(True, "")` injected, `(False, why)` failed, `(None, ...)` pending.
+
+    `AllInjected=True` is success. A record with a `Failed` event and not injected is a
+    definite failure (its message names the cause, e.g. the container-runtime mismatch).
+    """
+    status = obj.get("status") or {}
+    conditions = {c.get("type"): c.get("status") for c in status.get("conditions") or []}
+    if conditions.get("AllInjected") == "True":
+        return True, ""
+    for record in (status.get("experiment") or {}).get("containerRecords") or []:
+        failed = [e for e in record.get("events") or [] if e.get("type") == "Failed"]
+        if failed and record.get("phase") != "Injected":
+            return False, str(failed[-1].get("message") or "Failed")[:300]
+    return None, "waiting for AllInjected"
+
+
+def rollout_state(obj: Mapping[str, Any], before: int) -> tuple[bool | None, str]:
+    """A Deployment edit took effect once a new generation exists and is observed."""
+    generation = int((obj.get("metadata") or {}).get("generation", 0))
+    observed = int((obj.get("status") or {}).get("observedGeneration", 0))
+    if generation > before and observed >= generation:
+        return True, ""
+    return None, f"generation {generation} (before {before}), observed {observed}"
+
+
 def _ms(ts: datetime) -> int:
     return int(ts.timestamp() * 1000)
 
@@ -457,26 +490,71 @@ class LiveRunner:
             self._sleep(missing)
 
     def _inject(self, spec: ScenarioSpec, repeat: int) -> Callable[[], None]:
-        """Apply the fault now and return the callable that reverts it."""
+        """Apply the fault, confirm it took effect, and return the callable that reverts it.
+
+        Raises:
+            LiveRunnerError: the fault could not be confirmed; it has been reverted.
+        """
         if spec.chaos.kind:
             name = chaos_resource_name(spec, repeat)
             namespace = self._params.chaos_namespace
             manifest = build_chaos_manifest(spec, name=name, chaos_namespace=namespace)
-            self.kubectl(["apply", "-f", "-"], stdin=json.dumps(manifest))
             kind = spec.chaos.kind.lower()
 
             def revert_chaos() -> None:
                 self.kubectl(["-n", namespace, "delete", kind, name, "--ignore-not-found"])
 
+            self.kubectl(["apply", "-f", "-"], stdin=json.dumps(manifest))
+            self._confirm_or_revert(
+                lambda: chaos_injection_state(
+                    self._get_json(["-n", namespace, "get", kind, name, "-o", "json"])
+                ),
+                revert_chaos,
+                f"{kind}/{name}",
+            )
             return revert_chaos
 
         apply, undo = config_change_commands(spec)
-        self.kubectl(apply)
+        resource = str(spec.config_change["resource"])
+        get = ["-n", spec.target_namespace, "get", resource, "-o", "json"]
+        before = int(self._get_json(get).get("metadata", {}).get("generation", 0))
 
         def revert_config() -> None:
             self.kubectl(undo)
 
+        self.kubectl(apply)
+        self._confirm_or_revert(
+            lambda: rollout_state(self._get_json(get), before), revert_config, resource
+        )
         return revert_config
+
+    def _get_json(self, args: Sequence[str]) -> dict[str, Any]:
+        out = self.kubectl(args)
+        try:
+            loaded = json.loads(out) if out.strip() else {}
+        except ValueError:
+            return {}
+        return loaded if isinstance(loaded, dict) else {}
+
+    def _confirm_or_revert(
+        self,
+        check: Callable[[], tuple[bool | None, str]],
+        revert: Callable[[], None],
+        what: str,
+    ) -> None:
+        """Poll `check` until it confirms the fault; on failure or timeout, revert and raise."""
+        waited = 0.0
+        while True:
+            verdict, detail = check()
+            if verdict is True:
+                log.info("live_fault_confirmed", resource=what, after_s=waited)
+                return
+            if verdict is False or waited >= self._params.inject_timeout_s:
+                revert()
+                reason = detail if verdict is False else f"not confirmed in {waited:.0f}s"
+                raise LiveRunnerError(f"{what}: fault did not take effect ({reason})")
+            self._sleep(self._params.inject_poll_s)
+            waited += self._params.inject_poll_s
 
     @staticmethod
     def _write(
