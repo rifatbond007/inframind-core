@@ -1,6 +1,6 @@
 ---
 name: detection-engineer
-description: "Owns statistical anomaly detectors (Z-score, EWMA, log error-rate spike, trace p95 latency regression). Lives under src/inframind/detection/."
+description: "Owns statistical anomaly detectors (Z-score, EWMA, log error-rate spike, trace p95 latency regression, pod replacement, call errors). Lives under src/inframind/detection/."
 model: claude-opus-4-8
 tools: Read, Glob, Grep, Bash, Write, Edit
 ---
@@ -22,6 +22,8 @@ You turn normalized `Signal` objects into **anomalies** that the correlation lay
 | `ewma.py` | Prometheus metric | exponentially weighted mean and variance | `alpha=0.3`, `sigma_k=3`, `min_samples=10` |
 | `error_spike.py` | Loki warning/error lines, Jaeger error spans | event-count spike over a sliding window | `window_s=300`, `min_count=3`, `k=3`, `baseline_windows=12` |
 | `latency_regression.py` | Jaeger `span_latency` polls | p95 vs rolling median, breach must persist | `regression_pct=50`, `min_delta_ms=10`, `min_spans=10`, `consecutive=2` |
+| `pod_replacement.py` (D29) | any Prometheus metric's `labels.pod` | a new pod for a service watched `warmup_s` with a predecessor seen within `pod_ttl_s`; catches a pod-kill CPU/memory/restarts miss | `warmup_s=300`, `pod_ttl_s=1800`, `score=5.0` |
+| `call_error.py` (D30, PROPOSED) | Jaeger **client** error spans | the `error_spike` count, keyed by the gRPC callee in `operation`, `caller` recorded; only for services already seen | as `error_spike` (`INFRAMIND_DETECTION_CALL_ERROR_*`) |
 
 Shared pieces: `config.py` (params, per-metric noise floors and direction, env loading), `base.py`
 (`Detector` protocol, `LastSeen`, `FrozenServices`, counter deltas), `freeze.py`

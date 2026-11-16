@@ -1,6 +1,6 @@
 ---
 name: add-detector
-description: How to add a new anomaly detector (Z-score, EWMA, error spike, latency regression) in InfraMind.
+description: How to add a new anomaly detector (Z-score, EWMA, error spike, latency regression, pod replacement, call errors) in InfraMind.
 ---
 
 # Add a detector (skill entrypoint)
