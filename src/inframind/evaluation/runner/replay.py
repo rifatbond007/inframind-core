@@ -21,6 +21,7 @@ Replays never write fixtures — recording lands with the first real P7 run.
 from __future__ import annotations
 
 import dataclasses
+import gzip
 import itertools
 import json
 from collections.abc import Sequence
@@ -96,8 +97,31 @@ class ReplayResult:
         )
 
 
+#: A recording's signals: gzip-compressed (live recordings, committed) or plain (tests).
+SIGNALS_GZ = "signals.ndjson.gz"
+SIGNALS_PLAIN = "signals.ndjson"
+
+
+def signals_file(fixture_dir: Path) -> Path:
+    """The signals file of `fixture_dir`: the `.gz` one if present, else the plain one."""
+    compressed = fixture_dir / SIGNALS_GZ
+    return compressed if compressed.exists() else fixture_dir / SIGNALS_PLAIN
+
+
+def has_signals(fixture_dir: Path) -> bool:
+    """Whether `fixture_dir` holds a recording (either signals file)."""
+    return signals_file(fixture_dir).exists()
+
+
+def write_signals_gz(path: Path, signals: Sequence[Signal]) -> None:
+    """Write gzip NDJSON with no name or time in the header, so equal data gives equal bytes."""
+    lines = "".join(s.model_dump_json() + "\n" for s in signals).encode()
+    with path.open("wb") as raw, gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as gz:
+        gz.write(lines)
+
+
 def replay_signals(path: Path) -> list[Signal]:
-    """Read `signals.ndjson` from `path` and return the signals in order.
+    """Read a signals file (`.ndjson` or `.ndjson.gz`) and return the signals in order.
 
     Strict parse: lines that fail validation raise `ReplayError`. ts-ordering is asserted
     on the result, so a fixture whose timestamps drift backward is also an error.
@@ -105,9 +129,10 @@ def replay_signals(path: Path) -> list[Signal]:
     if not path.exists():
         raise ReplayError(f"{path} does not exist")
 
+    text = gzip.decompress(path.read_bytes()).decode() if path.suffix == ".gz" else path.read_text()
     signals: list[Signal] = []
     line_no = 0
-    for raw in path.read_text().splitlines():
+    for raw in text.splitlines():
         line_no += 1
         if not raw.strip():
             continue
@@ -175,7 +200,7 @@ def replay_run(
     """
     rca_params = rca_params or RCAParams()
     correlation_params = correlation_params or CorrelationParams()
-    signals_path = fixture_dir / "signals.ndjson"
+    signals_path = signals_file(fixture_dir)
     graph_path = fixture_dir / "graph.json"
     meta_path = fixture_dir / "meta.json"
 
@@ -328,15 +353,19 @@ def make_run_id(*, spec: ScenarioSpec, seed: int, repeat: int, method: str) -> s
 
 
 __all__ = [
+    "SIGNALS_GZ",
     "OnLLMSummary",
     "ReplayError",
     "ReplayInputs",
     "ReplayResult",
     "Scorer",
     "compute_fault_window",
+    "has_signals",
     "load_graph_snapshot",
     "make_run_id",
     "pre_fault_anomalies",
     "replay_run",
     "replay_signals",
+    "signals_file",
+    "write_signals_gz",
 ]

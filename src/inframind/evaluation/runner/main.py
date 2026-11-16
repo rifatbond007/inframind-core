@@ -41,7 +41,7 @@ from ..config import EvalParams, eval_set_or_all, load_eval_params
 from ..scenarios import ScenarioError, load_set, runnable
 from ..schema import ResultRow, ScenarioSpec
 from ..scoring import default_scorer
-from .replay import make_run_id, replay_run
+from .replay import has_signals, make_run_id, replay_run, replay_signals, signals_file
 
 log = get_logger(__name__)
 
@@ -231,13 +231,13 @@ def _dirty_baseline(spec: ScenarioSpec, fixture_dir: Path, repeat: int) -> bool:
     import json
 
     from ..schema import FixtureMeta
-    from .replay import pre_fault_anomalies, replay_signals
+    from .replay import pre_fault_anomalies, signals_file
 
     meta_path = fixture_dir / "meta.json"
     if not meta_path.exists() or not json.loads(meta_path.read_text()).get("recorded_live"):
         return False
     onset = FixtureMeta.from_json(meta_path).onset_ts
-    found = pre_fault_anomalies(replay_signals(fixture_dir / "signals.ndjson"), onset)
+    found = pre_fault_anomalies(replay_signals(signals_file(fixture_dir)), onset)
     if found:
         log.warning(
             "fixture_dirty_baseline",
@@ -263,7 +263,7 @@ def _run_one(
 
     seed = params.seed_override if params.seed_override is not None else spec.seed
     fixture_dir = fixture_dir_for(spec, params, repeat)
-    if not (fixture_dir / "signals.ndjson").exists():
+    if not has_signals(fixture_dir):
         log.warning(
             "fixture_missing",
             scenario_id=spec.scenario_id,
@@ -291,7 +291,7 @@ def _run_one(
     if run_baselines or run_ablations:
         from .replay import replay_signals
 
-        signals = replay_signals(fixture_dir / "signals.ndjson")
+        signals = replay_signals(signals_file(fixture_dir))
         baseline_input = _baseline_input_from_replay(signals=signals, incidents=[])
         if run_baselines:
             infra_predicted = (
@@ -327,7 +327,7 @@ def _record_live(specs: Sequence[ScenarioSpec], params: EvalParams) -> int:
             continue
         for repeat in range(params.repeats):
             target = fixture_dir_for(spec, params, repeat)
-            if (target / "signals.ndjson").exists() and not params.allow_overwrite:
+            if has_signals(target) and not params.allow_overwrite:
                 log.info("live_fixture_exists", scenario_id=spec.scenario_id, repeat=repeat)
                 continue
             try:

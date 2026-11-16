@@ -70,8 +70,9 @@ always replays the recording, so every number is reproducible from the fixture a
    (`chaos-testing`), or the `config_change` (`kubectl set env`).
 5. Holds `duration_s`, reverts in a `finally` (delete the CR / `kubectl rollout undo`),
    then waits `cooldown_s + INFRAMIND_EVAL_SETTLE_S` (45 s).
-6. Writes `signals.ndjson` (bus entries from `onset - baseline` to the end, sorted by
-   `ts`), `graph.json` (every `GraphUpdate` up to the end folded into a fresh
+6. Writes `signals.ndjson.gz` (signals observed from `onset - baseline` to the end,
+   sorted by `ts`, gzip with no name or time in the header so equal data gives equal bytes;
+   about 45 KiB per repeat instead of 600 KiB), `graph.json` (every `GraphUpdate` up to the end folded into a fresh
    `ServiceGraph`), and `meta.json` (`recorded_live: true`, `baseline_s`).
 
 Each D6 repeat is its own recording in `r<repeat>/`; `fixture_dir_for(spec, params,

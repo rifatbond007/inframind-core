@@ -27,7 +27,7 @@ from inframind.evaluation.runner.live import (
     config_change_commands,
     read_signals,
 )
-from inframind.evaluation.runner.replay import replay_signals
+from inframind.evaluation.runner.replay import replay_signals, signals_file, write_signals_gz
 from inframind.evaluation.scenarios import load_set
 from inframind.evaluation.schema import FixtureMeta, ScenarioSpec
 
@@ -246,7 +246,8 @@ def test_run_scenario_records_a_replayable_fixture(tmp_path: Path) -> None:
     # History was already long enough: no baseline wait; hold the fault, then settle.
     assert clock.slept == [spec.duration_s, spec.cooldown_s + 45.0]
 
-    signals = replay_signals(target / "signals.ndjson")  # strict: monotone ts, valid lines
+    assert (target / "signals.ndjson.gz").exists()  # live recordings are committed compressed
+    signals = replay_signals(signals_file(target))  # strict: monotone ts, valid lines
     assert len(signals) == recording.signal_count > 0
     end = T0 + timedelta(seconds=spec.duration_s + spec.cooldown_s + 45.0)
     assert signals[0].ts >= T0 - timedelta(seconds=600 + 60)
@@ -455,3 +456,14 @@ def test_a_recording_with_an_anomaly_in_its_baseline_is_not_scored(tmp_path: Pat
     clean = _live_fixture(tmp_path / "clean", burst_before_onset=False)
     assert _dirty_baseline(spec, dirty, 0) is True
     assert _dirty_baseline(spec, clean, 0) is False
+
+
+def test_compressed_signals_round_trip_byte_for_byte(tmp_path: Path) -> None:
+    """Same signals, same bytes: the gzip header carries no time, so re-recording is diffable."""
+    signals = [_signal(T0 + timedelta(seconds=i)) for i in range(20)]
+    a, b = tmp_path / "a.ndjson.gz", tmp_path / "b.ndjson.gz"
+    write_signals_gz(a, signals)
+    write_signals_gz(b, signals)
+    assert a.read_bytes() == b.read_bytes()
+    assert [s.id for s in replay_signals(a)] == [s.id for s in signals]
+    assert signals_file(tmp_path / "missing").name == "signals.ndjson"

@@ -10,7 +10,8 @@ Layout, one directory per repeat (D6: each repeat is its own recording):
 
 ```
 <scenario_id>/r<repeat>/
-  signals.ndjson   stream:signals from onset - baseline_s to the end, sorted by ts
+  signals.ndjson.gz  stream:signals observed from onset - baseline_s to the end, sorted by
+                     ts, gzip with no name/time in the header (same data, same bytes)
   graph.json       ServiceGraph folded from stream:graph-updates up to the end
   meta.json        scenario_id, seed, repeat, onset_ts, window_s, recorded_at,
                    baseline_s, recorded_live: true

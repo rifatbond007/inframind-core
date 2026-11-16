@@ -57,6 +57,7 @@ from inframind.rca.graph import ServiceGraph
 from ..config import EvalParams
 from ..scenarios import BLOCKED_REASON
 from ..schema import FixtureMeta, ScenarioSpec
+from .replay import SIGNALS_GZ, has_signals, write_signals_gz
 
 log = get_logger(__name__)
 
@@ -392,7 +393,7 @@ class LiveRunner:
                 f"{spec.scenario_id} is blocked ({spec.block_reason or BLOCKED_REASON}); "
                 "pass --allow-blocked to record it anyway."
             )
-        if (record_to / "signals.ndjson").exists() and not overwrite:
+        if has_signals(record_to) and not overwrite:
             raise LiveRunnerError(f"{record_to} already holds a fixture; refusing to overwrite")
 
         redis = self._redis_client()
@@ -486,12 +487,11 @@ class LiveRunner:
         *,
         pre_s: float,
     ) -> None:
-        """Write `signals.ndjson`, `graph.json`, `meta.json` (meta last: it marks completion)."""
+        """Write `signals.ndjson.gz`, `graph.json`, `meta.json` (meta last: marks completion)."""
         if not signals:
             raise LiveRunnerError(f"{meta.scenario_id}: no signals in the recorded window")
         record_to.mkdir(parents=True, exist_ok=True)
-        lines = "".join(s.model_dump_json() + "\n" for s in signals)
-        (record_to / "signals.ndjson").write_text(lines)
+        write_signals_gz(record_to / SIGNALS_GZ, signals)
         (record_to / "graph.json").write_text(json.dumps(graph.snapshot(), indent=2) + "\n")
         provenance = {**meta.as_dict(), "baseline_s": pre_s, "recorded_live": True}
         (record_to / "meta.json").write_text(json.dumps(provenance, indent=2) + "\n")
