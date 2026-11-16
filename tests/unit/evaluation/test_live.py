@@ -123,7 +123,14 @@ def _runner(
     kubeconfig.write_text("")
     return LiveRunner(
         kubeconfig,
-        params=EvalParams(**{"baseline_s": 600.0, "settle_s": 45.0, **params}),
+        params=EvalParams(
+            **{
+                "baseline_s": 600.0,
+                "settle_s": 45.0,
+                "fixture_dir": str(tmp_path / "fixtures"),
+                **params,
+            }
+        ),
         redis=redis,
         run_command=kubectl,
         now=clock.now,
@@ -351,3 +358,28 @@ def test_main_live_records_every_repeat_and_skips_blocked(
     assert [(c[0], c[1]) for c in calls] == [(sid, r) for r in range(5)]
     assert calls[3][2] == tmp_path / "fx" / sid / "r3"
     assert not (tmp_path / "results").exists()
+
+
+def test_back_to_back_repeats_keep_the_previous_fault_out_of_the_baseline(
+    tmp_path: Path,
+) -> None:
+    """Repeat 1 waits until repeat 0's recording ended `baseline_s` ago (the live dev-01 bug).
+
+    Without the wait the repeats ran 287 s apart, the previous kill sat inside the next 600 s
+    baseline, and every later repeat opened its incident before its own fault.
+    """
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=3000)
+    clock = FakeClock(T0)
+    runner = _runner(redis, clock, FakeKubectl(), tmp_path)
+    spec = _spec("dev-podchaos-01-cartservice-pod-kill")
+    fixtures = tmp_path / "fixtures" / spec.scenario_id
+
+    first = runner.run_scenario(spec, repeat=0, record_to=fixtures / "r0")
+    assert first.meta.recorded_at is not None
+    second = runner.run_scenario(spec, repeat=1, record_to=fixtures / "r1")
+
+    gap = (second.meta.onset_ts - first.meta.recorded_at).total_seconds()
+    assert gap == pytest.approx(600.0)
+    baseline_start = second.meta.onset_ts - timedelta(seconds=600)
+    assert baseline_start >= first.meta.recorded_at

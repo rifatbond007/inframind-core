@@ -8,7 +8,12 @@ One recording (`LiveRunner.run_scenario`):
 
 1. **Baseline.** Wait until `stream:signals` holds at least `pre_s` seconds of history
    (`max(spec.warmup_s, EvalParams.baseline_s)`; the detectors need 10 samples and the
-   Prometheus collector polls every 30 s, so the default is 600 s).
+   Prometheus collector polls every 30 s, so the default is 600 s), **and** until the end
+   of the newest recording under `fixture_dir` is at least `pre_s` in the past, so no
+   earlier fault (another repeat or scenario) lies inside this run's baseline window.
+   Back-to-back repeats 287 s apart once put the previous kill inside the next baseline:
+   the incident opened before the fault and every later repeat scored a false 0 s
+   latency.
 2. **Inject** at `onset_ts`: apply the Chaos Mesh CR built from `spec.chaos`
    (`build_chaos_manifest`), or apply `spec.config_change` with `kubectl set env`.
 3. **Hold** for `duration_s`, then **revert** (delete the CR / `kubectl rollout undo`). The
@@ -76,6 +81,7 @@ __all__ = [
     "build_chaos_manifest",
     "chaos_resource_name",
     "config_change_commands",
+    "latest_recording_end",
     "list_blocked_reasons",
     "read_graph",
     "read_signals",
@@ -242,6 +248,19 @@ def oldest_signal_at(redis: Any) -> datetime | None:
     return datetime.fromtimestamp(ms / 1000, tz=utcnow().tzinfo)
 
 
+def latest_recording_end(fixture_root: Path) -> datetime | None:
+    """The newest `recorded_at` of any live fixture under `fixture_root`, or None."""
+    newest: datetime | None = None
+    for meta_path in fixture_root.glob("*/r*/meta.json"):
+        try:
+            recorded = FixtureMeta.from_json(meta_path).recorded_at
+        except (OSError, ValueError, KeyError):
+            continue
+        if recorded is not None and (newest is None or recorded > newest):
+            newest = recorded
+    return newest
+
+
 def _ms(ts: datetime) -> int:
     return int(ts.timestamp() * 1000)
 
@@ -358,6 +377,7 @@ class LiveRunner:
 
         redis = self._redis_client()
         pre_s = max(spec.warmup_s, self._params.baseline_s)
+        self._wait_for_quiet(pre_s)
         self._wait_for_baseline(redis, pre_s)
 
         onset = self._now()
@@ -393,6 +413,16 @@ class LiveRunner:
             edges=edges,
         )
         return Recording(record_to, meta, len(signals), edges)
+
+    def _wait_for_quiet(self, pre_s: float) -> None:
+        """Sleep until the newest recording ended at least `pre_s` ago (module docstring)."""
+        last = latest_recording_end(Path(self._params.fixture_dir))
+        if last is None:
+            return
+        missing = pre_s - (self._now() - last).total_seconds()
+        if missing > 0:
+            log.info("live_waiting_for_quiet_baseline", seconds=round(missing, 1))
+            self._sleep(missing)
 
     def _wait_for_baseline(self, redis: Any, pre_s: float) -> None:
         """Sleep until `stream:signals` holds `pre_s` seconds of history before the onset."""
