@@ -18,6 +18,13 @@ class HighestErrorServiceBaseline:
     def rank(self, input: BaselineInput) -> list[str]:
         """Return services sorted by `-error_rate`, then alphabetically."""
         _validate_nonempty(input.services)
+        if input.error_events_by_service is not None:
+            # Real recordings carry error events, not error ratios: rank the services that
+            # had any, most first. A service with none is not ranked (no evidence, no guess).
+            counts = input.error_events_by_service
+            return sorted(
+                (s for s in input.services if counts.get(s, 0) > 0), key=lambda s: (-counts[s], s)
+            )
         rates = {
             service: _error_rate(input.signals_by_service.get(service) or [])
             for service in input.services

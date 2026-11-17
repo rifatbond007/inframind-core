@@ -161,18 +161,75 @@ async def test_escalation_to_critical_explains_and_alerts_again(
     assert store.names().count("record_alerts") == 2
 
 
-async def test_a_closed_incident_is_stored_and_re_armed_without_an_alert(
+async def test_a_closed_incident_is_re_summarised_and_re_armed_without_an_alert(
     store: Recorder, console: Any
 ) -> None:
     calls: list[int] = []
     pipeline = _pipeline(_explain_ok(calls))
     await pipeline(_incident(), _analysis())
     await pipeline(_incident(revision=2, state="resolved"), _analysis())
-    assert store.names()[-1] == "write_incident"
-    assert calls == [1]
+    # The resolve refreshes the summary once (final ranking) and sends no alert.
+    assert store.names() == [
+        "write_incident",
+        "record_summary",
+        "record_alerts",
+        "write_incident",
+        "record_summary",
+    ]
+    assert store.calls[-1][1]["provenance"]["reason"] == "resolved"
+    assert calls == [1, 1]
     # Re-armed: a new open revision of the same id would alert again.
     await pipeline(_incident(revision=3), _analysis())
+    assert calls == [1, 1, 1]
+    assert store.names().count("record_alerts") == 2
+
+
+def _ranked(*services: str) -> IncidentAnalysis:
+    """An analysis whose candidates are `services`, best first."""
+    return _analysis(
+        [
+            Candidate(
+                service=s,
+                score=1.0 - i / 10,
+                depth=i,
+                change_correlation=0.0,
+                confidence=0.8,
+                evidence=[],
+            )
+            for i, s in enumerate(services)
+        ]
+    )
+
+
+async def test_a_new_top_candidate_refreshes_the_summary_without_an_alert(
+    store: Recorder, console: Any
+) -> None:
+    """The stored summary must name the stored primary (the live adservice/frontend bug)."""
+    calls: list[int] = []
+    pipeline = _pipeline(_explain_ok(calls))
+    await pipeline(_incident(revision=1), _ranked("adservice", "frontend"))
+    await pipeline(_incident(revision=2), _ranked("adservice", "frontend"))  # same primary
+    await pipeline(_incident(revision=3), _ranked("frontend", "adservice"))  # new primary
+    await pipeline(_incident(revision=4), _ranked("frontend", "adservice"))  # same again
+
     assert calls == [1, 1]
+    assert store.names().count("record_alerts") == 1
+    summaries = [kw["provenance"] for name, kw in store.calls if name == "record_summary"]
+    assert [(p["reason"], p["revision"], p["primary"]) for p in summaries] == [
+        ("alert", 1, "adservice"),
+        ("primary_changed", 3, "frontend"),
+    ]
+
+
+async def test_an_incident_never_alerted_is_never_summarised(store: Recorder, console: Any) -> None:
+    """Refreshes only keep an existing summary true; they never create the first one."""
+    calls: list[int] = []
+    pipeline = _pipeline(_explain_ok(calls))
+    await pipeline(_incident(revision=1), _analysis(candidates=[]))  # alerted, nothing to explain
+    await pipeline(_incident(revision=2), _ranked("frontend"))
+    await pipeline(_incident(revision=3, state="resolved"), _ranked("frontend"))
+    assert calls == []
+    assert "record_summary" not in store.names()
 
 
 async def test_an_llm_failure_still_alerts_with_the_template(store: Recorder, console: Any) -> None:

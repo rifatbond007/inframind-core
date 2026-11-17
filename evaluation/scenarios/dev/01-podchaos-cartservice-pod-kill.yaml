@@ -5,15 +5,15 @@ set: dev
 seed: 1001
 fault_type: pod_kill
 target_service: cartservice
-target_namespace: boutique
+target_namespace: default
 duration_s: 180
 warmup_s: 60
 cooldown_s: 60
 expected_root_cause: cartservice
 expected_affected_services:
   - cartservice
-  - front-end
-  - checkout
+  - checkoutservice
+  - frontend
 chaos:
   kind: PodChaos
   spec:
@@ -23,7 +23,8 @@ chaos:
       label: app
       value: cartservice
 metrics_to_assert:
-  - http_requests_total
-  - http_request_duration_seconds_bucket
+  - container_restarts_total
+  - cpu_cores
+  - span_latency
 repeats: 5
 status: runnable

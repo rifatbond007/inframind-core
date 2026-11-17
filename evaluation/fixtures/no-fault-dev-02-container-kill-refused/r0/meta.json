@@ -1,0 +1,12 @@
+{
+  "scenario_id": "dev-podchaos-02-shippingservice-container-kill",
+  "seed": 1002,
+  "repeat": 0,
+  "onset_ts": "2026-11-16T09:41:47.700619+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-16T09:46:33.087397+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true,
+  "fault_injected": false,
+  "fault_note": "container-kill was refused by the runtime (D26): 'expected docker:// but got containerd://'; no fault in this recording"
+}

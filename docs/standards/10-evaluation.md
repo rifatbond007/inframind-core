@@ -16,14 +16,14 @@ src/inframind/evaluation/
 ├── baselines/          six D7 baselines; Baseline protocol; BaselineInput
 └── runner/
     ├── replay.py       NDJSON fixture → determinstic pipeline → ResultRow
-    ├── live.py         kubectl path; asserts kind-* context; refuses blocked scenarios
+    ├── live.py         records fixtures on kind-*: inject, revert, read the bus (10.2)
     └── main.py         CLI: --set, --dry-run, --soak, --ablation, --allow-blocked
 
 evaluation/
 ├── scenarios/
-│   ├── dev/            8 YAMLs (4 runnable + 4 blocked on D2-Chaos-runtime)
-│   └── test/           6 YAMLs (4 runnable + 2 blocked on D2-Chaos-runtime)
-├── fixtures/<scenario>/
+│   ├── dev/            10 YAMLs (6 runnable + 4 blocked on D2-Chaos-runtime)
+│   └── test/           8 YAMLs (6 runnable + 2 blocked on D2-Chaos-runtime)
+├── fixtures/<scenario>/r<repeat>/   live recordings only (written by `make eval-live`)
 │   ├── signals.ndjson
 │   ├── graph.json
 │   └── meta.json
@@ -52,20 +52,47 @@ a fixture**.
   the `window_s` passed in, so a fixture cannot be undiagnosable just because the
   default window is shorter than the fault duration.
 
-`runner/live.py` is the cluster path. It:
+`runner/live.py` is the cluster path. A live run **records; it never scores**: scoring
+always replays the recording, so every number is reproducible from the fixture alone.
+`LiveRunner.run_scenario(spec, repeat=k, record_to=...)`:
 
-1. Asserts the kubeconfig context starts with `kind-` (PUKU.md rule — no `~/.kube/config`).
-2. Refuses a blocked scenario unless `INFRAMIND_EVAL_ALLOW_BLOCKED=1`.
-3. Refuses to run on a non-`kind-` context even with the flag. No escape hatch that can
-   point at a shared cluster.
-4. `run_scenario` raises `NotImplementedError` until the recorder lands — see 10.13.
+1. Asserts the kubeconfig context starts with `kind-` (`$KUBECONFIG` or
+   `testbed/.kube/config`, never `~/.kube/config`) and pins `--context` on every call.
+   No flag lifts this.
+2. Refuses a blocked scenario unless `allow_blocked`, and an existing fixture unless
+   `overwrite`.
+3. Waits until `stream:signals` holds `max(warmup_s, INFRAMIND_EVAL_BASELINE_S)` seconds
+   of history (default 600 s: the detectors need 10 samples, Prometheus is polled every
+   30 s).
+4. At `onset_ts`, applies the CR from `build_chaos_manifest` (selector →
+   `labelSelectors` in `target_namespace`, extra `chaos.spec` keys verbatim, the
+   scenario's `duration` so Chaos Mesh self-recovers) in `INFRAMIND_EVAL_CHAOS_NAMESPACE`
+   (`chaos-testing`), or the `config_change` (`kubectl set env`).
+5. Holds `duration_s`, reverts in a `finally` (delete the CR / `kubectl rollout undo`),
+   then waits `cooldown_s + INFRAMIND_EVAL_SETTLE_S` (45 s).
+6. Writes `signals.ndjson.gz` (signals observed from `onset - baseline` to the end,
+   sorted by `ts`, gzip with no name or time in the header so equal data gives equal bytes;
+   about 45 KiB per repeat instead of 600 KiB), `graph.json` (every `GraphUpdate` up to the end folded into a fresh
+   `ServiceGraph`), and `meta.json` (`recorded_live: true`, `baseline_s`).
 
-The harness **ships unexecuted** on the live path. The replay integration test is the
-real gate.
+Each D6 repeat is its own recording in `r<repeat>/`; `fixture_dir_for(spec, params,
+repeat)` is the only path builder. A missing repeat is logged (`fixture_missing`) and
+produces no row, so the report's coverage shows the gap instead of reusing `r0`.
+Hand-written fixtures for tests live in `tests/fixtures/eval/` and are never evaluated.
 
-## 10.3 Scenarios — 14 YAMLs across the sacred split
+**Which incidents count, and which recordings are scored.** `replay_trace` judges each
+incident by its latest snapshot: one that resolved before the fault is noise
+(`noise_incidents`), never a detection, so a pre-fault blip cannot become a 0 s latency.
+`baseline_problem` refuses a live recording only when an incident is still open at the
+fault (it would absorb the fault) or more than `PRE_FAULT_ANOMALY_LIMIT` (20) anomalies
+precede it (an earlier fault). Clean baselines show 0-6 anomalies per 10 min; an earlier
+fault inside one showed 60-308. A config change is confirmed only when the updated replicas
+are the only ones left (`rollout_state`): a new pod that never becomes Ready leaves the old
+one serving and the fault never reaches traffic.
 
-`evaluation/scenarios/dev/` (8 files, tuning) and `evaluation/scenarios/test/` (6 files,
+## 10.3 Scenarios — 18 YAMLs across the sacred split
+
+`evaluation/scenarios/dev/` (10 files, tuning) and `evaluation/scenarios/test/` (8 files,
 scored once). Each YAML:
 
 ```yaml
@@ -74,21 +101,35 @@ set: dev
 seed: 1001
 fault_type: pod_kill
 target_service: cartservice
-target_namespace: boutique
+target_namespace: default
 duration_s: 180
 warmup_s: 60
 cooldown_s: 60
 expected_root_cause: cartservice
-expected_affected_services: [cartservice, front-end, checkout]
+expected_affected_services: [cartservice, checkoutservice, frontend]
 chaos:
   kind: PodChaos
   spec: {action: pod-kill, mode: one, selector: {label: app, value: cartservice}}
-metrics_to_assert: [http_requests_total, http_request_duration_seconds_bucket]
+metrics_to_assert: [container_restarts_total, cpu_cores, span_latency]
 repeats: 5
 ```
 
-`chaos` may be omitted (e.g. the config-change test scenario uses a real `ConfigMap`
-edit, not a chaos CR). `ScenarioSpec.is_blocked` returns `True` when `status: blocked`
+Service names, the namespace and `expected_affected_services` are Online Boutique's
+(`testbed/boutique/`): the affected set is the target plus every service that reaches it
+through calls, taken from the manifests' `<callee>:<port>` env vars.
+`test_scenarios_match_the_online_boutique_testbed` derives that call graph and fails on any
+mismatch. `metrics_to_assert` uses the logical metric names the collectors emit
+(`cpu_cores`, `memory_working_set_bytes`, `container_restarts_total`, and the Jaeger
+collector's `span_latency`).
+
+Every key of `chaos.spec` other than `action`/`mode`/`selector` (`containerNames`,
+`stressors`, `delay`, `direction`) is kept in `ChaosSpec.params` for the live runner. The
+loader rejects a fault Chaos Mesh cannot apply (`scenarios.CHAOS_ACTIONS`): PodChaos takes
+`pod-kill`/`pod-failure`/`container-kill` (the last needs `containerNames`), StressChaos
+takes no `action` and needs `stressors`, and the selector must name `target_service`.
+
+`chaos` may be omitted only when a `config_change` block describes the fault instead (the
+test-06 Deployment edit); a scenario with neither is a load error. `ScenarioSpec.is_blocked` returns `True` when `status: blocked`
 or `block_status: <reason>` is present in the file, and `fixture_dirname` is the
 canonical subdirectory of `evaluation/fixtures/`.
 
@@ -109,14 +150,33 @@ you meant to run that never loaded is worse than a crash.
 
 | Scenario | Fault | Chaos | Status |
 |---|---|---|---|
-| dev-01..03 | pod-kill / container-exit / cpu-stress | PodChaos | runnable |
-| dev-04..05 | cpu-stress / memory-stress | StressChaos | blocked — D2-Chaos-runtime |
-| dev-06 | latency-inject | StressChaos | blocked — D2-Chaos-runtime |
-| dev-07 | network-partition | NetworkChaos | blocked — D2-Chaos-runtime |
-| test-01..03 | pod-kill / container-exit / node-cordon | PodChaos | runnable |
-| test-04 | cpu-stress | StressChaos | blocked — D2-Chaos-runtime |
-| test-05 | network-latency | NetworkChaos | blocked — D2-Chaos-runtime |
-| test-06 | config-change (`kubectl set env`/ConfigMap) | none | runnable |
+| dev-01 | pod-kill, cartservice | PodChaos | runnable |
+| dev-02 | container-kill, shippingservice | PodChaos | runnable (containerd runtime, verified live) |
+| dev-03 | pod-kill, productcatalogservice | PodChaos | runnable |
+| dev-04 | cpu-stress, cartservice | StressChaos | blocked — D2-Chaos-runtime |
+| dev-05 | memory-stress, paymentservice | StressChaos | blocked — D2-Chaos-runtime |
+| dev-06 | network delay, emailservice | NetworkChaos | blocked — D2-Chaos-runtime |
+| dev-07 | network partition, cartservice | NetworkChaos | blocked — D2-Chaos-runtime |
+| dev-08 | pod-kill, recommendationservice | PodChaos | runnable |
+| dev-09 | pod-failure, currencyservice | PodChaos | runnable |
+| dev-10 | `EXTRA_LATENCY=1s` rollout, productcatalogservice | none (`config_change`) | runnable |
+| dev-11 | bad `PRODUCT_CATALOG_SERVICE_ADDR` rollout, frontend (caller bug) | none (`config_change`) | runnable |
+| test-01 | pod-kill, checkoutservice | PodChaos | runnable |
+| test-02 | container-kill, cartservice | PodChaos | blocked — D2-Chaos-runtime (daemon) |
+| test-03 | pod-failure, paymentservice | PodChaos | runnable |
+| test-04 | cpu-stress, currencyservice | StressChaos | blocked — D2-Chaos-runtime |
+| test-05 | network delay, checkoutservice | NetworkChaos | blocked — D2-Chaos-runtime |
+| test-06 | bad `REDIS_ADDR` rollout, cartservice | none (`config_change`) | runnable |
+| test-07 | container-kill, emailservice | PodChaos | runnable |
+| test-08 | bad `PRODUCT_CATALOG_SERVICE_ADDR` rollout, recommendationservice | none (`config_change`) | runnable |
+| test-09 | pod-failure, productcatalogservice | PodChaos | runnable |
+
+No `(fault_type, target_service)` pair appears in both splits
+(`test_no_fault_appears_in_both_splits`). **13 of the 20 are runnable** (7 dev + 6 test). Since
+D2-Chaos-runtime (containerd runtime, 2026-11-16) `container-kill` injects (verified live) and
+dev-02 is runnable again; test-02 and the six Stress/NetworkChaos scenarios stay blocked until
+each is probed live. dev-11 (a bad frontend rollout, the live D30 caller-bug check) and test-09
+(`pod-failure` on productcatalogservice) were added while container-kill was refused.
 
 The blocked files carry `# block_status: d2_chaos_runtime_docker` and
 `status: blocked`. The runner **refuses** them by default (exit code 3, message in
@@ -165,19 +225,23 @@ a scored row.
 
 | # | Baseline | What it does | Why it is in the set |
 |---|---|---|---|
-| 1 | `raw_alertmanager` | Fires on the raw alert's `instance` label — no graph, no correlation. | The "what do we already have" floor. |
-| 2 | `random_service` | Uniform pick from the service set, seeded. | The chance floor. Proves top-1 > chance. |
-| 3 | `highest_error_service` | Highest error *rate* from metrics. | The obvious heuristic an SRE writes first. |
-| 4 | `deepest_error_span` | Deepest erroring span in the trace graph. | The trace-only heuristic; RCA's closest competitor. |
-| 5 | `pagerank` | **Re-export** of the P5 `rca.pagerank` implementation. | Proves the graph term earns its keep. |
-| 6 | `llm_only` | `llm.explain()` output parsed for a service name. | D1's control: the LLM alone must score near chance. If it scores high, that is a finding about the evaluation, not a reason to change the code. |
+| 1 | `raw_alertmanager` | Ranks the application services Alertmanager alerted on in the incident window, most alerts first. No alert: it ranks nothing (a miss). | The "what do we already have" floor. |
+| 2 | `random_service` | A seeded random order of the service set; the seed is per run (`seed*1000 + repeat`). | The chance floor. Proves top-1 > chance. |
+| 3 | `highest_error_service` | Ranks services by error events (Loki problem lines + Jaeger error spans) in the incident window; services with none are not ranked. | The obvious heuristic an SRE writes first. |
+| 4 | `deepest_error_span` | Follows each erroring Jaeger span to its target (a failing client span points at the gRPC service it called, e.g. `hipstershop.CartService/GetCart` -> `cartservice`) and ranks by call-graph depth, then error count. | The trace-only heuristic; RCA's closest competitor. |
+| 5 | `pagerank` | Runs the P5 `rank_pagerank` on the replayed incident: same symptoms, anomalies, graph and window InfraMind ranked. No incident: ranks nothing. | Proves the graph term earns its keep. |
+| 6 | `llm_only` | The LLM names a root cause from evidence alone. **Not run yet:** replay calls no LLM, so the row is skipped and logged (`baseline_not_run`) until LLM answers are recorded per run. | D1's control: the LLM alone must score near chance. If it scores high, that is a finding about the evaluation, not a reason to change the code. |
+
+Every baseline ranks from the same `ReplayTrace` as InfraMind (`replay.replay_trace`): the
+same detected incident, its window (`first opened_at` to last update, never the ground-truth
+fault window) and its anomalies, each counted once. Evidence-based baselines never append an
+alphabetical tail of services they have no evidence for: an earlier version fell back to
+alphabetical order, so four baselines all answered `adservice` and scored a free top-3 when
+the root cause sorted second. With no incident, baselines read the whole recording.
 
 `BASELINE_NAMES` is the locked tuple. `Baseline` is a `Protocol` with one method:
 `rank(baseline_input, summary_text='') -> list[str]`. `BaselineInput` is frozen; an empty
-service set raises `EmptyServiceSet`, never an empty ranking.
-
-`llm_only` importing `llm` is allowed by the DAG. It needs no fixtures beyond the signal
-stream — its only input is the LLM summary text plus the `BaselineInput`.
+service set raises `EmptyServiceSet`.
 
 ## 10.6 Ablations
 
@@ -233,8 +297,9 @@ eval-ablation:   ## The four ablations.
 	$(RUN) -m inframind.evaluation.runner.main --set dev --ablation
 ```
 
-All four default to **replay**. `--live` is the flag that reaches for `kubectl`, and no
-Make target sets it — a cluster-touching run must be typed by a human.
+All four replay. `make eval-live [EVAL_SET=dev|test|all] [SCENARIO=<id>]` is the only
+target that reaches for `kubectl`; it records fixtures and is run by a human against
+`kind-inframind` after `make up`.
 
 ## 10.9 The `runner.main` CLI
 
@@ -244,8 +309,12 @@ inframind.evaluation.runner.main [--set {dev|test|all}] [--dry-run]
                                  [--fixture-dir PATH] [--results-dir PATH]
                                  [--soak | --ablation]
                                  [--allow-blocked] [--allow-overwrite]
-                                 [--live]
+                                 [--live] [--scenario ID ...]
 ```
+
+`--live` records the missing `r<repeat>` fixtures of every selected runnable scenario and
+skips blocked ones (unless `--allow-blocked`); it writes no results. `--scenario` (repeatable)
+narrows any run to the named scenario ids.
 
 Exit codes:
 
@@ -254,7 +323,8 @@ Exit codes:
 | 0 | Run completed; results written. |
 | 2 | Result-row validation failed (a row without `run_id` provenance). |
 | 3 | A blocked scenario was present and `--allow-blocked` was not set. |
-| 4 | The `--live` flag was set outside a `kind-*` kubeconfig context. |
+| 4 | The results directory exists and `--allow-overwrite` was not set. |
+| 5 | `--live`: not a `kind-*` context, no kubectl, or a recording failed. |
 
 `--dry-run` prints the resolved plan (per-scenario row count, baseline list, ablation list)
 and exits 0 without writing anything.
@@ -316,7 +386,9 @@ have no `run_id` provenance and the report test rejects one (see 10.11).
 - `test_module_dag.py` — `evaluation` does not import `storage`, `alerting`, or `api`.
 
 **Integration** (`tests/integration/test_evaluation_replay.py`): the full replay path over
-the seed corpus with no cluster — this is the real gate. It runs green on this box.
+the synthetic corpus in `tests/fixtures/eval/` with no cluster. `test_live.py` covers the
+recorder with fakeredis, a fake kubectl and a fake clock (CR shape, revert on interrupt,
+baseline wait, paging, `--live` CLI).
 
 ## 10.12 Hard rules
 
@@ -334,12 +406,8 @@ the seed corpus with no cluster — this is the real gate. It runs green on this
 
 ## 10.13 Out of scope for this PR
 
-- **Live cluster runs.** No docker daemon on this box. `live.py` ships with the kind-*
-  context check and the blocked-scenario guard wired, but `run_scenario` is
-  `NotImplementedError`. The recorder side lands with the first real P7 run.
-- **Fixture recording.** A live run will eventually write a `signals.ndjson` for replay;
-  that path is `live.py`'s next step. The seed fixtures in this PR are checked-in
-  manually.
+- **Recordings.** The recorder is implemented and unit-tested; no real fixture is
+  committed until a human runs `make eval-live` on the testbed.
 - **Committing any result numbers.** Nothing to report until a run happens. P9's
   "never invent a number" is honoured by committing an empty directory.
 - **LaTeX / `results-to-latex`.** P9. P7 produces JSON and CSV; P9 renders tables.

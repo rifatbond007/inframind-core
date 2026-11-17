@@ -9,6 +9,7 @@ travelled. The walk is a bounded breadth-first search; ``max_depth`` is pinned b
 from __future__ import annotations
 
 from collections import deque
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 from inframind.common.signal import normalise_service
@@ -37,6 +38,7 @@ def walk_toward_callees(
     *,
     max_depth: int | None = None,
     params: RCAParams | None = None,
+    extra_edges: Mapping[str, frozenset[str]] | None = None,
 ) -> list[Candidate]:
     """Return the walkable services reachable from `symptom` along ``caller -> callee`` edges.
 
@@ -46,6 +48,9 @@ def walk_toward_callees(
 
     The symptom service itself is included as the depth-0 candidate; every other candidate is
     strictly deeper. `max_depth` bounds how far the walk travels.
+
+    `extra_edges` (caller -> callees) are calls the incident itself observed failing (D30):
+    walkable for this walk only, never written into the graph.
     """
     params = params or RCAParams()
     depth_cap = max_depth if max_depth is not None else params.max_depth
@@ -59,8 +64,9 @@ def walk_toward_callees(
         current = queue.popleft()
         if current.depth >= depth_cap:
             continue
-        for callee in graph.successors(current.service):
-            if not graph.is_walkable(current.service, callee):
+        observed = (extra_edges or {}).get(current.service, frozenset())
+        for callee in sorted(set(graph.successors(current.service)) | observed):
+            if callee not in observed and not graph.is_walkable(current.service, callee):
                 continue
             if callee in visited:
                 continue

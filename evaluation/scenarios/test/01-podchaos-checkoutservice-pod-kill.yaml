@@ -1,0 +1,29 @@
+# Test split scenario 01 — PodChaos pod-kill on checkoutservice.
+# Scored once (D6). Never read by the tuning loop.
+scenario_id: test-podchaos-01-checkoutservice-pod-kill
+set: test
+seed: 2001
+fault_type: pod_kill
+target_service: checkoutservice
+target_namespace: default
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: checkoutservice
+expected_affected_services:
+  - checkoutservice
+  - frontend
+chaos:
+  kind: PodChaos
+  spec:
+    action: pod-kill
+    mode: one
+    selector:
+      label: app
+      value: checkoutservice
+metrics_to_assert:
+  - container_restarts_total
+  - cpu_cores
+  - span_latency
+repeats: 5
+status: runnable

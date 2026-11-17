@@ -21,6 +21,7 @@ Replays never write fixtures — recording lands with the first real P7 run.
 from __future__ import annotations
 
 import dataclasses
+import gzip
 import itertools
 import json
 from collections.abc import Sequence
@@ -96,8 +97,31 @@ class ReplayResult:
         )
 
 
+#: A recording's signals: gzip-compressed (live recordings, committed) or plain (tests).
+SIGNALS_GZ = "signals.ndjson.gz"
+SIGNALS_PLAIN = "signals.ndjson"
+
+
+def signals_file(fixture_dir: Path) -> Path:
+    """The signals file of `fixture_dir`: the `.gz` one if present, else the plain one."""
+    compressed = fixture_dir / SIGNALS_GZ
+    return compressed if compressed.exists() else fixture_dir / SIGNALS_PLAIN
+
+
+def has_signals(fixture_dir: Path) -> bool:
+    """Whether `fixture_dir` holds a recording (either signals file)."""
+    return signals_file(fixture_dir).exists()
+
+
+def write_signals_gz(path: Path, signals: Sequence[Signal]) -> None:
+    """Write gzip NDJSON with no name or time in the header, so equal data gives equal bytes."""
+    lines = "".join(s.model_dump_json() + "\n" for s in signals).encode()
+    with path.open("wb") as raw, gzip.GzipFile(filename="", fileobj=raw, mode="wb", mtime=0) as gz:
+        gz.write(lines)
+
+
 def replay_signals(path: Path) -> list[Signal]:
-    """Read `signals.ndjson` from `path` and return the signals in order.
+    """Read a signals file (`.ndjson` or `.ndjson.gz`) and return the signals in order.
 
     Strict parse: lines that fail validation raise `ReplayError`. ts-ordering is asserted
     on the result, so a fixture whose timestamps drift backward is also an error.
@@ -105,9 +129,10 @@ def replay_signals(path: Path) -> list[Signal]:
     if not path.exists():
         raise ReplayError(f"{path} does not exist")
 
+    text = gzip.decompress(path.read_bytes()).decode() if path.suffix == ".gz" else path.read_text()
     signals: list[Signal] = []
     line_no = 0
-    for raw in path.read_text().splitlines():
+    for raw in text.splitlines():
         line_no += 1
         if not raw.strip():
             continue
@@ -123,6 +148,40 @@ def replay_signals(path: Path) -> list[Signal]:
     return signals
 
 
+#: More anomalies than this before the fault is an incident-sized burst, not noise. Clean
+#: dev recordings show 0-6 per 10 min baseline; an earlier fault inside one showed 60-308.
+PRE_FAULT_ANOMALY_LIMIT = 20
+
+
+def baseline_problem(trace: ReplayTrace) -> str | None:
+    """Why a recording's baseline cannot be scored, or None when it can.
+
+    Two cases: an incident still open when the fault starts (it would absorb the fault and
+    report its earlier start as the detection), or an incident-sized burst of anomalies
+    before the fault (an earlier fault, which also skews the detectors' baselines). Single
+    noise anomalies that resolve before the fault are neither; they are false alarms.
+    """
+    onset = trace.onset_ts
+    if any(i.opened_at < onset for i in trace.incidents):
+        return "an incident was already open when the fault started"
+    found = pre_fault_anomalies(trace.signals, onset)
+    if found > PRE_FAULT_ANOMALY_LIMIT:
+        return f"{found} anomalies before the fault (limit {PRE_FAULT_ANOMALY_LIMIT})"
+    return None
+
+
+def pre_fault_anomalies(signals: Sequence[Signal], onset_ts: datetime) -> int:
+    """Anomalies the default detectors raise on the signals before `onset_ts`.
+
+    A recording's baseline must be quiet: an anomaly before the fault means an earlier fault
+    (another repeat, an aborted run, a test) is inside it, and the run would score an
+    incident the fault did not cause, typically as a false 0 s detection latency. Clean
+    live recordings score 0 here; the runner refuses to score any other.
+    """
+    engine = DetectionEngine.default({})
+    return sum(len(engine.process(s)) for s in signals if s.ts < onset_ts)
+
+
 def load_graph_snapshot(path: Path) -> ServiceGraph:
     """Build a `ServiceGraph` populated from `graph.json`, with cold-start fallbacks.
 
@@ -133,6 +192,103 @@ def load_graph_snapshot(path: Path) -> ServiceGraph:
         return ServiceGraph(seed_path=None)
     graph = ServiceGraph(seed_path=path)
     return graph
+
+
+@dataclass(frozen=True, slots=True)
+class ReplayTrace:
+    """What detection and correlation produced for one fixture; every ranker reads this.
+
+    InfraMind and the D7 baselines rank from the same trace, over the same incident window
+    and anomalies, so a comparison differs only in the ranking method.
+    """
+
+    signals: list[Signal]
+    graph: ServiceGraph
+    onset_ts: datetime
+    incidents: list[Incident]
+    #: Incidents that opened and resolved before the fault (ordinary noise, not detection).
+    noise_incidents: list[Incident] = field(default_factory=list)
+
+    @property
+    def first_open(self) -> datetime:
+        """When the first incident opened. Only valid when `incidents` is non-empty."""
+        return min(i.opened_at for i in self.incidents)
+
+    @property
+    def incident_window(self) -> tuple[datetime, datetime]:
+        """`(first opened_at, last updated_at)`: what the live RCA worker ranks over.
+
+        The ground-truth fault window is the scorer's business, never the ranker's: a
+        ranker that saw it would be told when the fault started.
+        """
+        if not self.incidents:
+            raise ReplayError("no incident: there is no incident window")
+        last = max((i.closed_at or i.updated_at) for i in self.incidents)
+        return (self.first_open, last)
+
+    @property
+    def symptoms(self) -> list[str]:
+        """Every service any incident revision named, sorted."""
+        return sorted({s for i in self.incidents for s in i.services})
+
+    @property
+    def incident_anomalies(self) -> list[Anomaly]:
+        """Each anomaly once (revisions repeat them), in `(ts, id)` order."""
+        unique = {a.id: a for i in self.incidents for a in i.anomalies}
+        return sorted(unique.values(), key=lambda a: (a.ts, a.id))
+
+
+def replay_trace(
+    fixture_dir: Path,
+    *,
+    params: EvalParams,
+    correlation_params: CorrelationParams | None = None,
+) -> ReplayTrace:
+    """Run detection and correlation over one fixture, exactly as the live worker does."""
+    correlation_params = correlation_params or CorrelationParams()
+    signals = replay_signals(signals_file(fixture_dir))
+    graph = load_graph_snapshot(fixture_dir / "graph.json")
+    window_s = float(params.detect_window_s)
+    meta_path = fixture_dir / "meta.json"
+    if meta_path.exists():
+        from ..schema import FixtureMeta
+
+        meta = FixtureMeta.from_json(meta_path)
+        onset_ts = meta.onset_ts
+        window_s = max(window_s, float(meta.window_s))
+    else:
+        onset_ts = _derive_onset(signals)
+
+    # The correlation grouping window defaults to 5 minutes; for an evaluation replay we
+    # tune it from the scenario's window so two anomalies on the same fault always join.
+    tracker = IncidentTracker(
+        (engine := DetectionEngine.default()).coordinator,
+        _tune_correlation(correlation_params, window_s=window_s),
+    )
+    incidents: list[Incident] = []
+    for signal in signals:
+        for anomaly in engine.process(signal):
+            incidents.extend(tracker.on_anomaly(anomaly))
+        # Mirror the worker's handle(): drive the tracker tick per signal.
+        incidents.extend(tracker.tick(signal.ts))
+        # Mirror the "attach_signal" path so Alertmanager signals are seen by the tracker.
+        if signal.source.value == "alertmanager":
+            tracker.attach_signal(signal)
+    # Judge each incident by its LATEST snapshot: every first snapshot is `open`, so "any
+    # snapshot open" would keep a blip that resolved minutes before the fault.
+    latest: dict[str, Incident] = {}
+    for incident in incidents:
+        latest[incident.id] = incident
+    live = {
+        iid for iid, last in latest.items() if last.closed_at is None or last.closed_at >= onset_ts
+    }
+    return ReplayTrace(
+        signals=signals,
+        graph=graph,
+        onset_ts=onset_ts,
+        incidents=[i for i in incidents if i.id in live],
+        noise_incidents=[i for i in incidents if i.id not in live],
+    )
 
 
 def compute_fault_window(onset_ts: datetime, duration_s: float) -> tuple[datetime, datetime]:
@@ -162,60 +318,23 @@ def replay_run(
     in-process. The bus is never touched.
     """
     rca_params = rca_params or RCAParams()
-    correlation_params = correlation_params or CorrelationParams()
-    signals_path = fixture_dir / "signals.ndjson"
-    graph_path = fixture_dir / "graph.json"
-    meta_path = fixture_dir / "meta.json"
-
-    signals = replay_signals(signals_path)
-    graph = load_graph_snapshot(graph_path)
-    window_s = float(params.detect_window_s)
-    if meta_path.exists():
-        from ..schema import FixtureMeta
-
-        meta = FixtureMeta.from_json(meta_path)
-        onset_ts = meta.onset_ts
-        window_s = max(window_s, float(meta.window_s))
-    else:
-        onset_ts = _derive_onset(signals)
-
-    # The correlation grouping window defaults to 5 minutes; for an evaluation replay we
-    # tune it from the scenario's window so two anomalies on the same fault always join.
-    tuned_correlation = _tune_correlation(correlation_params, window_s=window_s)
-    engine = DetectionEngine.default()
-    tracker = IncidentTracker(engine.coordinator, tuned_correlation)
-    anomalies: list[Anomaly] = []
-    incidents: list[Incident] = []
-    for signal in signals:
-        for anomaly in engine.process(signal):
-            anomalies.append(anomaly)
-            snapshots = tracker.on_anomaly(anomaly)
-            incidents.extend(snapshots)
-        # Mirror the worker's handle() — drive the tracker tick per signal.
-        incidents.extend(tracker.tick(signal.ts))
-        # Mirror the "attach_signal" path so Alertmanager signals are seen by the tracker.
-        if signal.source.value == "alertmanager":
-            tracker.attach_signal(signal)
+    trace = replay_trace(fixture_dir, params=params, correlation_params=correlation_params)
+    incidents = trace.incidents
 
     detected = bool(incidents)
     detection_latency_s: float | None = None
     if detected:
-        first_open = min(i.opened_at for i in incidents if i.state == "open")
-        detection_latency_s = max(0.0, (first_open - onset_ts).total_seconds())
+        detection_latency_s = max(0.0, (trace.first_open - trace.onset_ts).total_seconds())
 
     # Score the live detector/ranker for the infra variant. Baselines and ablations plug in
     # via the `scorer` callable so this single entry point produces every row.
     if incidents:
-        symptoms = sorted({s for i in incidents for s in i.services})
-
-        incident_anomalies = [a for i in incidents for a in i.anomalies]
-        window = compute_fault_window(onset_ts, spec.duration_s)
         ranked_candidates = rank_candidates(
             incident_id=run_id,
-            symptoms=symptoms,
-            anomalies=incident_anomalies,
-            graph=graph,
-            window=window,
+            symptoms=trace.symptoms,
+            anomalies=trace.incident_anomalies,
+            graph=trace.graph,
+            window=trace.incident_window,
             params=rca_params,
         )
         ranked_services = tuple(c.service for c in ranked_candidates)
@@ -316,14 +435,23 @@ def make_run_id(*, spec: ScenarioSpec, seed: int, repeat: int, method: str) -> s
 
 
 __all__ = [
+    "PRE_FAULT_ANOMALY_LIMIT",
+    "SIGNALS_GZ",
     "OnLLMSummary",
     "ReplayError",
     "ReplayInputs",
     "ReplayResult",
+    "ReplayTrace",
     "Scorer",
+    "baseline_problem",
     "compute_fault_window",
+    "has_signals",
     "load_graph_snapshot",
     "make_run_id",
+    "pre_fault_anomalies",
     "replay_run",
     "replay_signals",
+    "replay_trace",
+    "signals_file",
+    "write_signals_gz",
 ]

@@ -8,8 +8,9 @@ import pytest
 from fakeredis import FakeAsyncRedis
 
 from inframind.common import stream_keys
-from inframind.common.bus import SignalConsumer, publish
+from inframind.common.bus import SignalConsumer, TypedStreamConsumer, publish, publish_incident
 from inframind.common.exceptions import BusError
+from inframind.common.incident import Incident
 from inframind.common.signal import Signal, SignalType, Source
 from inframind.common.time import utcnow
 
@@ -175,3 +176,40 @@ async def test_a_default_group_still_reads_from_the_beginning(redis: FakeAsyncRe
     head = SignalConsumer(redis, "head", "c1", block_ms=10)
     await head.ensure_group()
     assert await head.poll_once(lambda s: asyncio.sleep(0)) == 1
+
+
+def _incident(revision: int, incident_id: str = "01M7HCNCH7EE86ATP3FE7MNVJ3") -> Incident:
+    now = utcnow()
+    return Incident(
+        id=incident_id,
+        revision=revision,
+        state="resolved" if revision == 3 else "open",
+        opened_at=now,
+        updated_at=now,
+        closed_at=now if revision == 3 else None,
+        title="frontend: error_spike anomaly",
+        services=["frontend"],
+        severity="warning",
+        fingerprint="592c365278a71eef",
+    )
+
+
+async def test_every_incident_revision_is_handled_and_redeliveries_are_not(
+    redis: FakeAsyncRedis,
+) -> None:
+    """Revisions share `Incident.id`; the dedup key must still tell them apart.
+
+    Keying dedup on the id alone made every revision after the first a "duplicate", so the
+    RCA process stored revision 1 and never saw an update or the `resolved` revision.
+    """
+    for revision in (1, 2, 2, 3):  # revision 2 is redelivered once
+        await publish_incident(redis, _incident(revision))
+    c = TypedStreamConsumer(redis, "rca", "c1", Incident, stream=stream_keys.INCIDENTS, block_ms=10)
+    await c.ensure_group()
+    seen: list[tuple[int, str]] = []
+
+    async def handler(x: Incident) -> None:
+        seen.append((x.revision, x.state))
+
+    await c.poll_once(handler)
+    assert seen == [(1, "open"), (2, "open"), (3, "resolved")]

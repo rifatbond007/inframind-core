@@ -20,7 +20,8 @@ from inframind.evaluation.scenarios import blocked, load_set, runnable
 from inframind.evaluation.scoring import default_scorer, score
 
 REPO = Path(__file__).resolve().parents[2]
-FIXTURES = REPO / "evaluation" / "fixtures"
+#: The synthetic test corpus (tests/fixtures/eval/README.md), never the live recordings.
+FIXTURES = REPO / "tests" / "fixtures" / "eval"
 
 
 def _runnable_dev_with_fixtures(params: EvalParams) -> list:
@@ -37,7 +38,7 @@ def test_replay_corpus_reproduces_top1() -> None:
 
     for spec in scenarios:
         row = replay_run(
-            FIXTURES / spec.scenario_id,
+            FIXTURES / spec.scenario_id / "r0",
             spec=spec,
             scorer=default_scorer,
             method="infra",
@@ -62,7 +63,7 @@ def test_replay_is_deterministic_across_repeats() -> None:
     rankings = set()
     for repeat in range(params.repeats):
         row = replay_run(
-            FIXTURES / spec.scenario_id,
+            FIXTURES / spec.scenario_id / "r0",
             spec=spec,
             scorer=default_scorer,
             method="infra",
@@ -82,7 +83,7 @@ def test_seed_override_makes_a_run_bit_reproducible() -> None:
     params = EvalParams(fixture_dir=str(FIXTURES), seed_override=99999)
     spec = _runnable_dev_with_fixtures(params)[0]
     row = replay_run(
-        FIXTURES / spec.scenario_id,
+        FIXTURES / spec.scenario_id / "r0",
         spec=spec,
         scorer=default_scorer,
         method="infra",
@@ -98,22 +99,29 @@ def test_seed_override_makes_a_run_bit_reproducible() -> None:
 
 def test_every_baseline_produces_a_ranking_for_every_fixture() -> None:
     """All six D7 baselines run over the corpus without raising."""
-    from inframind.evaluation.runner.main import _baseline_input_from_replay
-    from inframind.evaluation.runner.replay import replay_signals
+    from inframind.evaluation.runner.main import _baseline_input_from_trace
+    from inframind.evaluation.runner.replay import replay_trace
 
     params = EvalParams(fixture_dir=str(FIXTURES))
     for spec in _runnable_dev_with_fixtures(params):
-        signals = replay_signals(FIXTURES / spec.scenario_id / "signals.ndjson")
-        baseline_input = _baseline_input_from_replay(signals=signals, incidents=[])
+        trace = replay_trace(FIXTURES / spec.scenario_id / "r0", params=params)
         rows = _run_baselines(
             spec=spec,
             seed=spec.seed,
             repeat=0,
-            baseline_input=baseline_input,
-            pagerank_services=["cartservice"],
+            baseline_input=_baseline_input_from_trace(trace),
+            trace=trace,
             summary_text="cartservice looks like the culprit",
         )
         assert len(rows) == 6, f"{spec.scenario_id}: expected 6 baseline rows, got {len(rows)}"
+        no_llm = _run_baselines(
+            spec=spec,
+            seed=spec.seed,
+            repeat=0,
+            baseline_input=_baseline_input_from_trace(trace),
+            trace=trace,
+        )
+        assert "llm_only" not in {r.method for r in no_llm}  # skipped, never a placeholder
         for row in rows:
             assert row.method_kind == "baseline"
             assert row.run_id
@@ -184,8 +192,14 @@ def test_runner_main_dry_run_lists_scenarios(
     assert not (tmp_path / "phase7").exists(), "--dry-run must not write results"
 
 
-def test_blocked_scenarios_are_all_stress_or_network_chaos() -> None:
-    """Every blocked scenario needs StressChaos or NetworkChaos — the D2-Chaos-runtime set."""
+def test_blocked_scenarios_all_need_the_chaos_daemon() -> None:
+    """Every blocked scenario needs the Chaos Mesh daemon (D2-Chaos-runtime): Stress or
+    NetworkChaos, or PodChaos container-kill. pod-kill/pod-failure use the API and run."""
     all_blocked = blocked(load_set("dev")) + blocked(load_set("test"))
-    assert all(s.chaos.kind in ("StressChaos", "NetworkChaos") for s in all_blocked)
+    assert all(
+        s.chaos.kind in ("StressChaos", "NetworkChaos") or s.chaos.action == "container-kill"
+        for s in all_blocked
+    )
+    # dev-02 container-kill runs since D2-Chaos-runtime (containerd runtime, verified live).
+    assert any(s.chaos.action == "container-kill" for s in runnable(load_set("dev")))
     assert all(s.block_reason == "d2_chaos_runtime_docker" for s in all_blocked)

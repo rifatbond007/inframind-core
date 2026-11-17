@@ -6,15 +6,14 @@ set: dev
 seed: 1008
 fault_type: pod_kill
 target_service: recommendationservice
-target_namespace: boutique
+target_namespace: default
 duration_s: 180
 warmup_s: 60
 cooldown_s: 60
 expected_root_cause: recommendationservice
 expected_affected_services:
   - recommendationservice
-  - cartservice
-  - front-end
+  - frontend
 chaos:
   kind: PodChaos
   spec:
@@ -24,6 +23,8 @@ chaos:
       label: app
       value: recommendationservice
 metrics_to_assert:
-  - http_requests_total
+  - container_restarts_total
+  - cpu_cores
+  - span_latency
 repeats: 5
 status: runnable

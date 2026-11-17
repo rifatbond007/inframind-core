@@ -12,5 +12,6 @@ Before touching `testbed/` or cluster commands:
 1. Read [`docs/PROGRESS.md`](../../../docs/PROGRESS.md) — testbed is Phase P1.
 2. Use `kubectl` / `helm` only against `kind-*` contexts (hard rule in `CLAUDE.md`).
 3. Run the smoke checklist in the standards file after changes.
+4. Chaos Mesh runs with the containerd runtime (D2-Chaos-runtime). Change its chart with `helm upgrade` alone; `make chaos` also re-applies five demo CRs that inject faults. Turn on traffic (`kubectl scale deploy/loadgenerator --replicas=1`) before any recording.
 
 Owner: testbed-engineer agent (`Rifat`).

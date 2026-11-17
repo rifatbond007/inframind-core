@@ -1,0 +1,35 @@
+# block_status: d2_chaos_runtime_docker
+#
+# Test split scenario 04 — StressChaos cpu-stress on currencyservice.
+# BLOCKED: same D2-Chaos-runtime limitation as the dev stress scenarios.
+scenario_id: test-stresschaos-04-currencyservice-cpu-stress
+set: test
+seed: 2004
+fault_type: cpu_stress
+target_service: currencyservice
+target_namespace: default
+duration_s: 240
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: currencyservice
+expected_affected_services:
+  - currencyservice
+  - checkoutservice
+  - frontend
+chaos:
+  kind: StressChaos
+  spec:
+    mode: one
+    selector:
+      label: app
+      value: currencyservice
+    stressors:
+      cpu:
+        workers: 2
+        load: 80
+metrics_to_assert:
+  - cpu_cores
+  - span_latency
+repeats: 5
+status: blocked
+block_reason: d2_chaos_runtime_docker

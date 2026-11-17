@@ -92,9 +92,13 @@ local model (D28). Then a missing key, a rejected key, or a failed call degrades
 the deterministic template summary (7.4.4), and no request is ever sent to Ollama. The
 fallback stays on by default (D9).
 
-The explainer runs in the `rca` process (`inframind.main`, D28), once per alert rather than
-once per incident revision, and every call is audited (`audit_log.action = 'llm_summary'`,
-with the provider, model, validation status and raw reply).
+The explainer runs in the `rca` process (`inframind.main`, D28): once per alert, then, for an
+incident that already has a summary, again when the top-ranked service changes and once when
+the incident resolves (never per revision, and a refresh never sends an alert). This keeps
+the stored `summary_text` describing the stored ranking. Every call is audited
+(`audit_log.action = 'llm_summary'`, with the provider, model, validation status, raw reply,
+and the `reason` (`alert` | `primary_changed` | `resolved`), `revision` and `primary` it was
+written for).
 
 ## 7.7 Reproducibility
 

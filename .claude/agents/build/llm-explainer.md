@@ -35,7 +35,7 @@ You turn a ranked list of RCA candidates + evidence bundle into a human-readable
 3. Write the prompt template; **commit the prompt version** before running it against a scenario.
 4. Verify the validator by feeding it a synthetic bad output and confirming rejection.
 6. Verify the provider path (D28): with `LLM_API_KEY` set, the hosted OpenAI-compatible API (Groq, `LLM_BASE_URL`/`LLM_MODEL`) returns an `accepted` summary; with `INFRAMIND_LLM_OLLAMA_FALLBACK=false` and no key, `explain` returns the template summary without any network call; with the fallback on and no key, Ollama is used.
-7. The explainer runs inside the `rca` process (`inframind.main`, D28), once per alert; every call is audited as `llm_summary`.
+7. The explainer runs inside the `rca` process (`inframind.main`, D28), once per alert, plus a refresh (no alert) when the top-ranked service changes and once on resolve; every call is audited as `llm_summary` with its `reason`, `revision` and `primary`.
 
 ## Output style
 

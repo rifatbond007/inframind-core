@@ -1,0 +1,10 @@
+{
+  "scenario_id": "dev-podchaos-01-cartservice-pod-kill",
+  "seed": 1001,
+  "repeat": 0,
+  "onset_ts": "2026-11-16T07:31:30.759003+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-16T07:36:16.150182+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true
+}

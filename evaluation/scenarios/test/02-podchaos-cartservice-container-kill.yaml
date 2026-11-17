@@ -1,0 +1,41 @@
+# block_status: d2_chaos_runtime_docker
+#
+# BLOCKED (2026-11-16): container-kill runs through the Chaos Mesh daemon, like StressChaos and
+# NetworkChaos, and this kind runtime refuses it: every live dev-02 repeat reported
+# `Failed to apply chaos: expected docker:// but got containerd://` and recorded no fault.
+# pod-kill and pod-failure go through the Kubernetes API and work (verified the same day).
+#
+# Test split scenario 02 — PodChaos container-kill on cartservice.
+# Same service as dev-01 but a different failure mode: one container killed, pod kept.
+# Chaos Mesh PodChaos has no `container-exit` action; `container-kill` with the `server`
+# container named is the supported equivalent (same shape as testbed/chaos/oom-kill.yaml).
+scenario_id: test-podchaos-02-cartservice-container-kill
+set: test
+seed: 2002
+fault_type: container_kill
+target_service: cartservice
+target_namespace: default
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: cartservice
+expected_affected_services:
+  - cartservice
+  - checkoutservice
+  - frontend
+chaos:
+  kind: PodChaos
+  spec:
+    action: container-kill
+    mode: one
+    selector:
+      label: app
+      value: cartservice
+    containerNames:
+      - server
+metrics_to_assert:
+  - container_restarts_total
+  - span_latency
+repeats: 5
+status: blocked
+block_reason: d2_chaos_runtime_docker

@@ -9,26 +9,29 @@ set: dev
 seed: 1004
 fault_type: cpu_stress
 target_service: cartservice
-target_namespace: boutique
+target_namespace: default
 duration_s: 240
 warmup_s: 60
 cooldown_s: 60
 expected_root_cause: cartservice
 expected_affected_services:
   - cartservice
-  - front-end
-  - checkout
+  - checkoutservice
+  - frontend
 chaos:
   kind: StressChaos
   spec:
-    action: stress-cpu
     mode: one
     selector:
       label: app
       value: cartservice
+    stressors:
+      cpu:
+        workers: 2
+        load: 80
 metrics_to_assert:
-  - container_cpu_usage_seconds_total
-  - http_request_duration_seconds_bucket
+  - cpu_cores
+  - span_latency
 repeats: 5
 status: blocked
 block_reason: d2_chaos_runtime_docker

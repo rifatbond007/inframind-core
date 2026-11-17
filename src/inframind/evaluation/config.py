@@ -34,6 +34,17 @@ class EvalParams:
     # How long after fault onset an incident must open by to count as "detected".
     detect_window_s: float = 120.0
 
+    # Live recording: seconds of pre-fault history every fixture carries (the detectors need
+    # 10 samples and Prometheus is polled every 30 s), extra seconds after the cooldown so
+    # the collectors publish the recovery, and where the Chaos Mesh CRs are created.
+    baseline_s: float = 600.0
+    settle_s: float = 45.0
+    chaos_namespace: str = "chaos-testing"
+    # How long the recorder waits for proof that the fault took effect (Chaos Mesh
+    # `AllInjected`, or a new Deployment generation observed) before it gives up.
+    inject_timeout_s: float = 180.0
+    inject_poll_s: float = 2.0
+
     # Open-blocked scenarios anyway (used for fixture recording before live runs exist).
     allow_blocked: bool = False
 

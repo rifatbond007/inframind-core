@@ -91,6 +91,15 @@ class LatencyParams:
     min_samples: int = 10
 
 
+@dataclass(frozen=True)
+class PodReplacementParams:
+    """A new pod for a service watched for `warmup_s`; pods unseen for `pod_ttl_s` expire."""
+
+    warmup_s: float = 300.0
+    pod_ttl_s: float = 1800.0
+    score: float = 5.0
+
+
 def load_params(cls: type[T], detector: str, env: Mapping[str, str] | None = None) -> T:
     """Build `cls` from its defaults, overridden by `INFRAMIND_DETECTION_<DETECTOR>_<FIELD>`.
 

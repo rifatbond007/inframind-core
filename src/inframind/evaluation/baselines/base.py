@@ -38,6 +38,12 @@ class BaselineInput:
     alerts_by_service: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
     summary_text: str = ""
     ranked_hints: tuple[str, ...] = ()
+    #: Error events (Loki problem lines + Jaeger error spans) per service in the incident
+    #: window. None means "not provided" (unit tests feeding `signals_by_service` only).
+    error_events_by_service: dict[str, int] | None = None
+    #: Call-graph depth of the deepest erroring span pointing at each service (a failing
+    #: client span points at its callee). None means "not provided".
+    error_depth_by_service: dict[str, int] | None = None
 
     def __post_init__(self) -> None:
         if not self.services:

@@ -1,0 +1,30 @@
+# Dev split scenario 11 — a bad configuration rollout on frontend (the caller-bug case, D30).
+# Replaces dev-02 (container-kill is blocked by D26). frontend's PRODUCT_CATALOG_SERVICE_ADDR
+# points at a port nothing listens on, so frontend's own calls to a HEALTHY
+# productcatalogservice fail. The root cause is the misconfigured caller: this is the live
+# check that D30's call-error attribution does not blame a healthy callee. frontend's
+# readiness probe (`/_healthz`) does not check its dependencies, so the new pod becomes Ready
+# and serves the fault. The runner reverts the edit (`kubectl rollout undo`).
+scenario_id: dev-config-11-frontend-bad-catalog-addr
+set: dev
+seed: 1011
+fault_type: config_change
+target_service: frontend
+target_namespace: default
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: frontend
+expected_affected_services:
+  - frontend
+# No `chaos` block: the fault is the Deployment edit below, applied after the warmup.
+config_change:
+  resource: deployment/frontend
+  container: server
+  env:
+    PRODUCT_CATALOG_SERVICE_ADDR: "productcatalogservice:3551"
+metrics_to_assert:
+  - container_restarts_total
+  - span_latency
+repeats: 5
+status: runnable

@@ -29,8 +29,27 @@ def test_the_fixture_is_real_and_small() -> None:
     assert {s.attrs["metric"] for s in signals} == {"cpu_cores", "memory_working_set_bytes"}
 
 
+def metric_only(anomalies: list[Anomaly]) -> list[Anomaly]:
+    """Drop `pod_replaced`: the recording has real frontend pod replacements (see below)."""
+    return [a for a in anomalies if a.detector != "pod_replaced"]
+
+
 def test_quiet_cluster_produces_no_metric_anomalies() -> None:
-    assert replay(load()) == []
+    assert metric_only(replay(load())) == []
+
+
+def test_the_real_frontend_pod_replacements_are_the_only_pod_anomalies() -> None:
+    """The recording caught three frontend pod-kills (smoke C6); nothing else was replaced.
+
+    Pod `bmdg5` was replaced by `s9bgh`, then `hr269`, then `vnl8x` (20:08-20:14 UTC). The
+    earlier `jfpxt` was seen once before a collection gap and is relearned, not reported.
+    """
+    found = [a for a in replay(load()) if a.detector == "pod_replaced"]
+    assert [(a.service, a.attrs["pod"][-5:]) for a in found] == [
+        ("frontend", "s9bgh"),
+        ("frontend", "hr269"),
+        ("frontend", "vnl8x"),
+    ]
 
 
 def test_an_injected_spike_in_real_data_is_found() -> None:
@@ -45,7 +64,7 @@ def test_an_injected_spike_in_real_data_is_found() -> None:
         update={"attrs": {**victim.attrs, "value": victim.attrs["value"] * 50 + 0.5}}
     )
     signals[cpu[len(cpu) // 2]] = spiked
-    anomalies = replay(signals)
+    anomalies = metric_only(replay(signals))
     assert anomalies, "the injected spike was not detected"
     assert {a.signal_id for a in anomalies} == {spiked.id}
     assert {a.detector for a in anomalies} >= {"zscore", "ewma"}

@@ -1,32 +1,34 @@
 # block_status: d2_chaos_runtime_docker
 #
-# Dev split scenario 07 — NetworkChaos partition between cartservice and productcatalogservice.
+# Dev split scenario 07 — NetworkChaos partition isolating cartservice from its callers.
+# cartservice calls only redis-cart; its callers are checkoutservice and frontend, so a
+# partition on cartservice is the root cause and those two are the symptoms.
 # BLOCKED: NetworkChaos needs the same runtime resolution as StressChaos (D2-Chaos-runtime).
 scenario_id: dev-networkchaos-07-cartservice-partition
 set: dev
 seed: 1007
 fault_type: network_partition
 target_service: cartservice
-target_namespace: boutique
+target_namespace: default
 duration_s: 180
 warmup_s: 60
 cooldown_s: 60
-expected_root_cause: productcatalogservice
+expected_root_cause: cartservice
 expected_affected_services:
-  - productcatalogservice
   - cartservice
-  - front-end
+  - checkoutservice
+  - frontend
 chaos:
   kind: NetworkChaos
   spec:
-    action: loss
+    action: partition
     mode: all
     selector:
       label: app
       value: cartservice
+    direction: both
 metrics_to_assert:
-  - http_request_duration_seconds_bucket
-  - http_requests_total
+  - span_latency
 repeats: 5
 status: blocked
 block_reason: d2_chaos_runtime_docker

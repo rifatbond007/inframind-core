@@ -1,0 +1,37 @@
+# Unblocked 2026-11-16 by D2-Chaos-runtime: chaos-daemon now runs with the containerd runtime.
+# A live probe reached AllInjected=True and shippingservice's restart count went 1 -> 2. The
+# first five recordings (runtime refused, no fault) are kept in
+# evaluation/fixtures/no-fault-dev-02-container-kill-refused/ and never scored.
+# Dev split scenario 02 — PodChaos container-kill on shippingservice.
+# Chaos Mesh PodChaos has no `container-exit` action; `container-kill` with the `server`
+# container named is the supported equivalent (same shape as testbed/chaos/oom-kill.yaml).
+# shippingservice emits no traces (PUKU.md), so this also exercises the partial graph.
+scenario_id: dev-podchaos-02-shippingservice-container-kill
+set: dev
+seed: 1002
+fault_type: container_kill
+target_service: shippingservice
+target_namespace: default
+duration_s: 180
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: shippingservice
+expected_affected_services:
+  - shippingservice
+  - checkoutservice
+  - frontend
+chaos:
+  kind: PodChaos
+  spec:
+    action: container-kill
+    mode: one
+    selector:
+      label: app
+      value: shippingservice
+    containerNames:
+      - server
+metrics_to_assert:
+  - container_restarts_total
+  - span_latency
+repeats: 5
+status: runnable

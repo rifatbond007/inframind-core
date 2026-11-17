@@ -250,16 +250,20 @@ def test_detection_agent_matches_the_code() -> None:
         ErrorSpikeParams,
         EwmaParams,
         LatencyParams,
+        PodReplacementParams,
         ZScoreParams,
     )
 
     agent = _read(".claude/agents/build/detection-engineer.md")
     rows = [line for line in agent.splitlines() if line.startswith("| `") and ".py`" in line]
-    assert len(rows) == 4
+    assert (
+        len(rows) == 6
+    )  # zscore, ewma, error_spike, latency, pod_replaced (D29), call_error (D30)
     for row in rows:
         name = re.search(r"`(\w+\.py)`", row)
         assert name and (ROOT / "src" / "inframind" / "detection" / name.group(1)).exists()
     z, e, es, lat = ZScoreParams(), EwmaParams(), ErrorSpikeParams(), LatencyParams()
+    pod = PodReplacementParams()
     for expected in (
         f"window={z.window}",
         f"threshold={z.threshold:g}",
@@ -268,6 +272,8 @@ def test_detection_agent_matches_the_code() -> None:
         f"min_count={es.min_count}",
         f"regression_pct={lat.regression_pct:g}",
         f"consecutive={lat.consecutive}",
+        f"warmup_s={pod.warmup_s:g}",
+        f"pod_ttl_s={pod.pod_ttl_s:g}",
     ):
         assert expected in agent, f"the detection agent should state {expected}"
 

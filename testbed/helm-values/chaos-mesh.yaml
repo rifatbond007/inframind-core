@@ -77,13 +77,17 @@ controllerManager:
 # cluster.yaml). Applies faults (pod-kill, network-delay, cpu-stress,
 # stress-memory, oom-kill) on Pods scheduled to its node.
 chaosDaemon:
-  # D2: docker runtime + the kind-injected socket path. The kind
-  # cluster.yaml bind-mounts /run/containerd/containerd.sock to
-  # /var/run/docker.sock inside the kind node container; chaos-daemon
-  # reads it as a "docker" socket. The chart turns this into a hostPath
-  # volume at /var/run mounted at /host-run in the Pod (see file header).
-  runtime: docker
-  socketPath: /var/run/docker.sock
+  # D2-Chaos-runtime (approved 2026-11-16): the kind node runs containerd,
+  # so the daemon talks to it as containerd. With `runtime: docker` against
+  # this node every daemon-path fault (container-kill, StressChaos,
+  # NetworkChaos) failed with "expected docker:// but got containerd://"
+  # while PodChaos pod-kill/pod-failure (Kubernetes API) worked. The chart
+  # mounts the parent dir (/run/containerd) at /host-run, so the daemon
+  # reads /host-run/containerd.sock = the node's containerd socket. The
+  # /var/run/docker.sock extraMount in testbed/kind/cluster.yaml is now
+  # unused; it stays until the next cluster re-create (no restart needed).
+  runtime: containerd
+  socketPath: /run/containerd/containerd.sock
   # resource caps for the daemon
   resources:
     limits:
@@ -97,9 +101,10 @@ chaosDaemon:
   # `chaosDaemon.hostNetwork` is true. We keep it on so networkchaos CRs
   # work.
   hostNetwork: true
-  # Don't run the chaos-daemon in privileged mode on the kind node —
-  # we get by with the docker-socket approach.
-  privileged: false
+  # Privileged (the chart default): with the containerd runtime the daemon
+  # enters the target container's namespaces to kill, stress or delay it.
+  # Local kind testbed only (D8: no production use).
+  privileged: true
   # The chart's default image runs as PID 1 in the DaemonSet Pod; no
   # extra args needed for the docker-runtime path. The chart 2.7.2
   # values schema expects an object {registry, repository, tag}, not

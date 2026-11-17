@@ -131,11 +131,20 @@ inject against the containerd node — they raise `expected docker:// but got co
   spec.
 - Score blocked scenarios as zero today: rejected (PUKU.md: never invent a number).
 
+**Amendment (2026-11-16): PodChaos `container-kill` is blocked too.** It runs through the
+Chaos Mesh daemon like Stress/NetworkChaos. Live, all five dev-02 repeats were accepted by
+the API server (and a server-side dry run passed) but the CR reported
+`AllInjected=False` / `expected docker:// but got containerd://`, and the recordings held no
+fault. dev-02 and test-02 were marked `status: blocked` (later the same day D2-Chaos-runtime
+was applied, `container-kill` verified, and dev-02 unblocked; see the change log). `pod-kill` and `pod-failure` go through the
+Kubernetes API and were verified to inject the same day. The recorder now refuses to record
+a fault it cannot confirm (`AllInjected=True`, or a new observed Deployment generation).
+
 **Trigger to revisit:** D2-Chaos-runtime is approved and `make smoke-testbed` confirms
 all six blocked scenarios now replay end-to-end. The harness then drops the
 `d2_chaos_runtime_docker` block reason from those files and the 6 become runnable.
 
-**Cross-ref:** `docs/standards/10-evaluation.md` §10.3; `tests/integration/test_evaluation_replay.py::test_blocked_scenarios_are_all_stress_or_network_chaos`.
+**Cross-ref:** `docs/standards/10-evaluation.md` §10.3; `tests/integration/test_evaluation_replay.py::test_blocked_scenarios_all_need_the_chaos_daemon`.
 
 ## D9. LLM access is gated by redaction and a local fallback
 
@@ -353,6 +362,69 @@ loosening any package's edges.
 synchronous call hold up ranking, or a requirement for durable RCA results
 across crashes (both would justify a stream key, which is a D-change).
 
+**Amendment (2026-11-16, summary refresh):** once an incident has a stored
+summary, the pipeline re-explains it, without sending an alert, when the
+top-ranked service changes and once when the incident resolves. Each
+`llm_summary` audit row records the `reason`, `revision` and `primary` the
+summary describes. **Why:** on the live testbed one incident's ranking moved
+from adservice (revisions 1-2, summarised and alerted) to frontend
+(revisions 10-11), and the stored `summary_text` still named adservice: the
+incident record contradicted itself. D1 is unchanged: the LLM still only
+describes the ranking it is given. Cost: one extra call per change of the
+top candidate plus one at resolve; no extra alerts.
+
+## D29-PodReplacement. A new pod for an established service is an anomaly
+
+`detection/pod_replacement.py` adds a fifth detector, `pod_replaced`. Per
+service it remembers the pods its Prometheus signals came from
+(`attrs.labels.pod`) and fires once, severity `warning`, when a new pod
+appears for a service watched for at least `warmup_s` (300 s) while another
+pod of that service was seen within `pod_ttl_s` (1800 s). It is an event rule
+on a statistic the collectors already ship, with no training (D3) and no
+baseline to freeze (D4).
+
+**Why:** on the live testbed a frontend pod-kill produced no incident. The
+pod was replaced within seconds; CPU and memory read lower and alert upward
+only, the restart counter belongs to the old pod, and the frontend logged one
+error. Four of the twelve runnable scenarios are pod-kills, so without this
+signal they could only be scored as misses.
+
+**Evidence:** on the recorded quiet-cluster fixture (3516 real samples) it
+reports exactly the three frontend replacements the smoke tests caused and
+nothing else; the CPU/memory detectors still report nothing there.
+
+**Trigger to revisit:** a testbed with more than one replica per Deployment
+(scaling up would then fire), or the evaluation showing it as a false-positive
+source in the soak run.
+
+## D30-CallErrorAttribution. A failing call counts against the service it called
+
+**Status: PROPOSED (user approval pending).**
+
+1. `detection/call_error.py` adds a sixth detector, `call_error`: the `error_spike`
+   count spike, keyed by the **callee** of failing Jaeger client spans (the gRPC service in
+   `operation`, `pkg.FooService/Method` -> `fooservice`, accepted only for a service already
+   seen in some signal). Each anomaly records the `caller`.
+2. RCA reads every `call_error` anomaly as an observed failing call `caller -> callee` and
+   walks it as an edge for that incident only (never written into the `ServiceGraph`, D21),
+   with full confidence (the detector fires only after `min_count` failures).
+3. A candidate reached from several symptoms keeps its **deepest** depth, not its
+   shallowest: failures travel callee -> caller (D2), so a service below another anomalous
+   service explains it even when it is anomalous itself.
+
+**Why:** dev-01 (cartservice pod-kill), 5 clean live repeats: InfraMind ranked frontend,
+the symptom, first every time (top-1 0/5) while the `deepest_error_span` baseline scored 4/5
+by following frontend's failing `CartService/GetCart` calls. cartservice emits no traces, so
+the graph has no frontend -> cartservice edge, `error_spike` counted those failures against
+frontend, and once a killed callee was itself a symptom the shallowest-depth rule gave it
+depth 0 and it tied with its caller. With the three changes: top-1 5/5 on the same recordings.
+
+**Risk:** tuned on one dev scenario. It must hold on the other dev scenarios before the test
+split is scored once (D6); the test split has not been looked at.
+
+**Trigger to revisit:** a dev scenario where a caller's own bug produces client errors toward
+a healthy callee (the deepest-depth rule would then blame the callee).
+
 ## D-Setup. Step 0 only scaffolds the repo
 
 Step 0 (this phase) creates the module skeletons, tooling, CI, and dev compose. No functional
@@ -379,6 +451,10 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 - **D27-InProcessAlertingLlm** · 2026-10-21 · The Helm chart ships four Deployments (`api`, `ingestion`, `detection`, `rca`), not seven. Alerting lives in `api.app.AlertRouter`; the LLM explainer lives in `rca.worker` as a synchronous `llm.explain()` call. `ingestion` is one Deployment with three collector containers. · Why: a Deployment is a failure domain, not a stage label. Neither folded stage has an independent scaling axis (D1 makes the LLM presentation-only) nor an independent failure requirement, so separate Deployments would add two pods to `kubectl get pods` whose health carries no information — the same misread the `coverage` block prevents on the numbers side. · Alternatives: (a) ship seven Deployments as `standard 11` section 11.2 literally reads — rejected as speculative scaffolding for a requirement that does not exist at `kind` scale. (b) split the LLM into a Deployment *and* make the call asynchronous — rejected because D1 makes the summary presentation-only, so an async boundary would buy nothing and cost an extra queue. (c) run the three collectors as three Deployments — rejected because they poll the same observability pods and share a failure domain. · Status: approved by team. Trigger to revisit: independent LLM autoscaling or alerting backpressure. Cross-ref: `docs/standards/11-helm-packaging.md` sections 11.2 and 11.12.
 
 - **D28-CompositionRoot** · 2026-11-10 · `src/inframind/main.py` is the composition root: the `rca` process (compose and Helm) runs `python -m inframind.main`, which is the RCA worker plus an injected `on_analysis` hook that stores every ranked incident revision in Postgres, calls the LLM explainer only when an alert is due, dispatches the alert, and stores the summary, the alert rows and their audit rows. Alerting moves from the api process (where its router was never dispatched) to the rca process, amending D27. The LLM is a hosted OpenAI-compatible API (Groq on the testbed) configured by the `LLM_*` contract names; `INFRAMIND_LLM_OLLAMA_FALLBACK=false` disables the D9 local fallback on hosts that cannot run a model. · Why: no package in the module DAG may import `rca`, `llm`, `alerting` and `storage` together, so the chain standard 06b.4 describes was never wired and live incidents never reached Postgres, the LLM or a sink. A single root module composes them without loosening any package edge; `test_module_dag.py` pins `main` as the only root module that may. · Alternatives: (a) a new `stream:rca-results` key consumed by the api — rejected: a D-change to the pinned streams, contradicts 06b.4, and the api still may not import `llm`. (b) widen the `rca` or `alerting` DAG edges — rejected: it would let the ranker depend on the explainer, the opposite of D1. · Status: approved by the user (Md. Rifat Hossain) 2026-11-10; supervisor review pending. Cross-ref: `docs/standards/06b-storage-and-alerting.md` §06b.4, `docs/standards/07-llm-explainer.md`.
+- **D28-amendment (summary refresh)** · 2026-11-16 · An incident that already has a summary is re-explained, without an alert, when its top-ranked service changes and once on resolve; the audit row records `reason`, `revision`, `primary`. · Why: a live incident stored `primary: frontend` with a summary naming adservice (written at revision 1, never refreshed). · Alternatives: (a) re-explain every revision — rejected, one call per revision for no new information; (b) re-alert on every primary change — rejected, it defeats alert dedup; (c) keep the old summary and only flag it stale — rejected, the API would still show a wrong root cause. · Status: approved by the user (Md. Rifat Hossain) 2026-11-16; supervisor review pending.
+- **D29-PodReplacement** · 2026-11-16 · A fifth detector, `pod_replaced`, fires once when a service watched for 300 s gets a new pod while a predecessor was seen within 30 min. · Why: a live frontend pod-kill produced no incident (CPU/memory alert upward only, the restart counter is the old pod's), and 4 of 12 runnable scenarios are pod-kills. · Alternatives: (a) report pod-kill misses as they are — rejected, the fault is real and visible in the data the collectors already ship; (b) a new collector query on `kube_pod_created` — rejected, the pod label on existing series carries the same fact with no ingestion change; (c) alert on CPU/memory drops — rejected, P4 ruling 13 showed drops are traffic pauses, not faults. · Status: approved by the user (Md. Rifat Hossain) 2026-11-16; supervisor review pending.
+- **D30-CallErrorAttribution** · 2026-11-16 · `call_error` detector (failing client spans counted against the gRPC callee, `caller` recorded); RCA walks those observed failing calls as edges for the incident and keeps each candidate's deepest reach from any symptom. · Why: dev-01 top-1 0/5 (frontend, the symptom, every time) vs `deepest_error_span` 4/5; with D30 5/5 on the same recordings. · Alternatives: (a) collector emits a `GraphUpdate` for client spans to untraced callees — kept as a follow-up: it needs re-recording to evaluate and still leaves the depth tie; (b) a static Boutique call graph — rejected, testbed-specific knowledge in the ranker; (c) reweight the four terms — rejected, the two services tied on every term but depth. · Status: PROPOSED, user approval pending; supervisor review pending.
+- **D2-Chaos-runtime applied** · 2026-11-16 · `testbed/helm-values/chaos-mesh.yaml`: `chaosDaemon.runtime: containerd`, `socketPath: /run/containerd/containerd.sock`, `privileged: true` (chart default), applied with `helm upgrade` only (no demo CRs). Live probe: `container-kill` on shippingservice reached `AllInjected=True`, restart count 1 -> 2, recovered. dev-02 unblocked (7 dev + 6 test runnable); its five fault-free first recordings moved to `evaluation/fixtures/no-fault-dev-02-container-kill-refused/` (never scored). test-02 and the six Stress/NetworkChaos scenarios stay blocked until each is probed live (NetworkChaos also needs host kernel modules). The unused `/var/run/docker.sock` extraMount in `testbed/kind/cluster.yaml` goes on the next cluster re-create. · Status: approved by the user (Md. Rifat Hossain) 2026-11-16.
 
 - **D22** · 2026-10-11 · `change_correlation` is the pinned algorithm for the RCA `w4` term. Source is a single in-process K8s API watch on `Deployment`, `StatefulSet`, `DaemonSet`, `ConfigMap`, `Secret`, `HorizontalPodAutoscaler` (filtered to `.spec.template`, `.data`, `.spec.replicas` respectively), scoped to `INFRAMIND_WATCH_NAMESPACES`. Captures metadata only — **no Secret values stored**. Correlation uses a 30-minute pre-window (`CHANGE_CORRELATION_PRE_WINDOW_S`) before `incident.opened_at`, with recency-weighted soft saturation, returning a float in `[0, 1]`. The `change_events` Postgres table is append-only (D20). The watcher's `Role` extends the existing read-only `Role` (section 11.5) with `secrets` `get` / `list` / `watch` only — no write verbs, no `pods/exec`. · Why: the `w4` term is named and weighted in section 6.4 but had no algorithm. Without a pinned spec, every implementation invents its own and the D6 reproducibility contract breaks at the `w4` term. The K8s API watch (not the audit log) matches the existing read-only RBAC scope with a minimal extension. · Alternatives: (a) Watch the audit log — rejected for being more privileged than needed. (b) Poll the K8s API on a timer — rejected because polling misses bursts of changes between polls. (c) Use a sidecar — rejected because it adds a new `Deployment` with its own lifecycle for a single consumer. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/14-change-correlation.md`.
 
@@ -392,7 +468,7 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 
 - **P4-detection-rulings** · 2026-10-19 · Where the P4 design departs from the earlier standards and agents (full table with evidence: `docs/superpowers/specs/2026-10-19-p4-detection-design.md`): (1) frozen detectors still **score** but do not learn; (2) `freeze(service, ts)` per service; (3) Z-score window is 60 samples, `min_samples=10`; (4) `Anomaly` and the stream `Incident` live in `common/` (DAG), `detection/anomaly.py` re-exports; (5) per-metric absolute and relative std floors replace `std or 1e-9`; (6) state is per `(service, metric)` and counters are scored on their increase; (7) incident states are the surface-map set, "updating" is a `revision` bump; (8) the freeze is a renewable lease of `BASELINE_FREEZE_WINDOW`; (9) P4 ships a minimal per-service tracker because D4 needs incident state; (10) the log detector is a count spike, not a ratio (collectors send no totals); (11) env scheme `INFRAMIND_DETECTION_<DETECTOR>_<PARAM>` plus the existing `BASELINE_FREEZE_WINDOW`; (12) windows and decay use the signal's `ts`, not the wall clock; (13) resource gauges and counters alert **upward only**. · Why: each was a contradiction between the standard, the agent files, the DAG or the data; 11 and 12 follow D6; 5 and 13 are measured on 6244 recorded signals (0.8% false fires on quiet CPU with the 1e-9 floor, 6 of 6 metric anomalies were CPU drops when traffic stopped). · Alternatives: keep the standard's text (a frozen detector that goes silent, a two-sided gauge that alerts on idleness). · Status: applied in code, standards 01/05/10, `surface-map.md` and the detection/correlation agents; no D-number changed, so no supervisor sign-off is required.
 
-- **D2-Chaos-runtime (PROPOSED, not applied)** · 2026-10-19 · Run chaos-daemon with `chaosDaemon.runtime: containerd` and `socketPath: /run/containerd/containerd.sock`, and drop the `/var/run/docker.sock` `extraMounts` workaround, in `testbed/helm-values/chaos-mesh.yaml` and `testbed/kind/cluster.yaml`. · Why: with `runtime=docker` against a containerd node the daemon rejects every container id (`expected docker:// but got container`), so StressChaos and NetworkChaos never inject; only PodChaos (API-level) works, and the P1 smoke gate tests only pod-kill. NetworkChaos also needs the host kernel modules `sch_netem`, `ip_set_hash_ipport`, `ip_set_hash_net`. · Alternatives: keep the docker shim and rewrite container ids (unsupported). · Status: proposed; needs user approval, a `make chaos` re-run, and a `make smoke-testbed` check that includes a StressChaos injection. **Carried into P7 as [D26-Chaos-runtime-blocked](#d26-chaos-runtime-blocked-stressnetwork-chaos-is-blocked-podchaos-is-the-live-path): the 6 affected scenarios now ship written and marked `blocked`, and the harness refuses to score them.**
+- **D2-Chaos-runtime (APPROVED and applied 2026-11-16 by the user; container-kill verified, Stress/NetworkChaos not yet)** · 2026-10-19 · Run chaos-daemon with `chaosDaemon.runtime: containerd` and `socketPath: /run/containerd/containerd.sock`, and drop the `/var/run/docker.sock` `extraMounts` workaround, in `testbed/helm-values/chaos-mesh.yaml` and `testbed/kind/cluster.yaml`. · Why: with `runtime=docker` against a containerd node the daemon rejects every container id (`expected docker:// but got container`), so StressChaos and NetworkChaos never inject; only PodChaos (API-level) works, and the P1 smoke gate tests only pod-kill. NetworkChaos also needs the host kernel modules `sch_netem`, `ip_set_hash_ipport`, `ip_set_hash_net`. · Alternatives: keep the docker shim and rewrite container ids (unsupported). · Status: proposed; needs user approval, a `make chaos` re-run, and a `make smoke-testbed` check that includes a StressChaos injection. **Carried into P7 as [D26-Chaos-runtime-blocked](#d26-chaos-runtime-blocked-stressnetwork-chaos-is-blocked-podchaos-is-the-live-path): the 6 affected scenarios now ship written and marked `blocked`, and the harness refuses to score them.**
 
 - **D7-Replay** · 2026-10-21 · The evaluation harness's reproducibility mechanism is **signal-time replay** from an NDJSON fixture (`evaluation/fixtures/<scenario>/signals.ndjson`), not a cluster-backed re-run. `runner/replay.py` re-feeds a fixture through detection → correlation → ranking and is byte-identical across repeats. The live path (`runner/live.py`) asserts a `kind-*` kubeconfig context, refuses blocked scenarios, and ships with `run_scenario` as `NotImplementedError` pending the fixture recorder. · Why: the pipeline consumes the `Signal` stream's `ts` values end-to-end (D6 property), so pinning signal time pins the whole pipeline's output. Replay is the only path that runs green on a dev box with no docker daemon; live runs become a way to *produce* fixtures, not to score them. · Alternatives: (a) wall-clock re-runs — rejected, not reproducible across hosts. (b) mocking the pipeline — rejected, does not exercise the production path. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/10-evaluation.md` §10.2; `tests/integration/test_evaluation_replay.py`.
 

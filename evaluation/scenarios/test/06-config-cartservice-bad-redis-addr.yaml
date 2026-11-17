@@ -1,0 +1,32 @@
+# Test split scenario 06 — a bad configuration rollout on cartservice, no chaos at all.
+# cartservice reads its Redis address from the REDIS_ADDR env var (it has no ConfigMap), so
+# the change is a Deployment edit: REDIS_ADDR points at a port nothing listens on, the new
+# pod cannot reach redis-cart, and cart calls from checkoutservice and frontend fail.
+# This is the only test scenario that exercises change correlation (standard 14, the D22
+# `w4` term) end to end: the Deployment edit is the change event the K8s watch records.
+# The runner reverts the edit (`kubectl rollout undo`) at the end of `duration_s`.
+scenario_id: test-config-06-cartservice-bad-redis-addr
+set: test
+seed: 2006
+fault_type: config_change
+target_service: cartservice
+target_namespace: default
+duration_s: 300
+warmup_s: 60
+cooldown_s: 60
+expected_root_cause: cartservice
+expected_affected_services:
+  - cartservice
+  - checkoutservice
+  - frontend
+# No `chaos` block: the fault is the Deployment edit below, applied after the warmup.
+config_change:
+  resource: deployment/cartservice
+  container: server
+  env:
+    REDIS_ADDR: "redis-cart:6380"
+metrics_to_assert:
+  - container_restarts_total
+  - span_latency
+repeats: 5
+status: runnable
