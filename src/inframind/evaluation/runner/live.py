@@ -27,8 +27,11 @@ One recording (`LiveRunner.run_scenario`):
    crashed recorder cannot leave a fault behind.
 4. **Settle** for `cooldown_s + settle_s` so the collectors publish the recovery.
 5. **Record** `stream:signals` entries from `onset - pre_s` to the end, sorted by `ts`,
-   the service graph folded from every `stream:graph-updates` entry up to the end, and a
-   `meta.json` with the onset and window.
+   the service graph folded from every `stream:graph-updates` entry up to the end, the
+   K8s change events the RCA process's watcher stored from `onset - pre_s - 1800 s` to the
+   end (`changes.json`, read from the API's `GET /change-events`, D22), and a `meta.json`
+   with the onset and window. The API is checked before the fault, so a recording never
+   silently lacks its change log.
 
 Guards:
 
@@ -58,12 +61,13 @@ from inframind.common.graph_update import GraphUpdate
 from inframind.common.logging import get_logger
 from inframind.common.signal import Signal
 from inframind.common.time import utcnow
+from inframind.rca.change_correlation import ChangeEvent
 from inframind.rca.graph import ServiceGraph
 
 from ..config import EvalParams
 from ..scenarios import BLOCKED_REASON
 from ..schema import FixtureMeta, ScenarioSpec
-from .replay import SIGNALS_GZ, has_signals, write_signals_gz
+from .replay import CHANGES_JSON, SIGNALS_GZ, has_signals, write_signals_gz
 
 log = get_logger(__name__)
 
@@ -76,6 +80,13 @@ CHAOS_API_VERSION = "chaos-mesh.org/v1alpha1"
 #: run's quiet-baseline wait (`latest_recording_end`).
 FAULT_MARKER = "fault-started.json"
 
+#: How far before the baseline the recorder copies change events: the ranker's change
+#: correlation pre-window (`CHANGE_CORRELATION_PRE_WINDOW_S`, standard 14.7).
+CHANGE_LOOKBACK_S = 1800.0
+
+#: `(start, end) -> events`: reads the stored change log (the API by default).
+ChangeFetcher = Callable[[datetime, datetime], list[ChangeEvent]]
+
 #: The bus stores each model as JSON under this field (`common/bus.py`).
 _BUS_FIELD = b"data"
 _XRANGE_PAGE = 5_000
@@ -84,6 +95,7 @@ _XRANGE_PAGE = 5_000
 CommandRunner = Callable[[Sequence[str], str | None], tuple[int, str, str]]
 
 __all__ = [
+    "CHANGES_JSON",
     "FAULT_MARKER",
     "KIND_CONTEXT_PREFIX",
     "BlockedScenarioError",
@@ -95,12 +107,14 @@ __all__ = [
     "chaos_injection_state",
     "chaos_resource_name",
     "config_change_commands",
+    "fetch_changes_from_api",
     "fresh_history_start",
     "latest_recording_end",
     "list_blocked_reasons",
     "read_graph",
     "read_signals",
     "rollout_state",
+    "write_changes",
 ]
 
 
@@ -258,6 +272,34 @@ def read_graph(redis: Any, end: datetime) -> ServiceGraph:
     return graph
 
 
+def fetch_changes_from_api(api_url: str) -> ChangeFetcher:
+    """A `ChangeFetcher` over the InfraMind API's `GET /change-events`."""
+
+    def fetch(start: datetime, end: datetime) -> list[ChangeEvent]:
+        import httpx
+
+        try:
+            response = httpx.get(
+                f"{api_url.rstrip('/')}/change-events",
+                params={"start": start.isoformat(), "end": end.isoformat()},
+                timeout=10.0,
+            )
+            response.raise_for_status()
+            items = response.json()["items"]
+        except (httpx.HTTPError, ValueError, KeyError) as e:
+            raise LiveRunnerError(f"could not read change events from {api_url}: {e}") from e
+        return [ChangeEvent.model_validate(item) for item in items]
+
+    return fetch
+
+
+def write_changes(path: Path, events: Sequence[ChangeEvent]) -> None:
+    """Write `changes.json`: the events sorted by `(occurred_at, resource)`."""
+    ordered = sorted(events, key=lambda e: (e.occurred_at, e.resource))
+    payload = {"events": [e.model_dump(mode="json") for e in ordered]}
+    path.write_text(json.dumps(payload, indent=2) + "\n")
+
+
 def _entry_ms(entry_id: Any) -> int:
     """Milliseconds part of a Redis stream entry id (`<ms>-<seq>`)."""
     text = entry_id.decode() if isinstance(entry_id, bytes) else str(entry_id)
@@ -398,8 +440,10 @@ class LiveRunner:
         run_command: CommandRunner | None = None,
         now: Callable[[], datetime] = utcnow,
         sleep: Callable[[float], None] = time.sleep,
+        fetch_changes: ChangeFetcher | None = None,
     ) -> None:
         self._params = params or EvalParams()
+        self._fetch_changes = fetch_changes or fetch_changes_from_api(self._params.api_url)
         self._run = run_command or _subprocess_runner
         if run_command is None and shutil.which("kubectl") is None:
             raise WrongKubeContext("kubectl not on PATH; refusing to run live scenarios")
@@ -488,6 +532,9 @@ class LiveRunner:
         pre_s = max(spec.warmup_s, self._params.baseline_s)
         self._wait_for_quiet(pre_s)
         self._wait_for_baseline(redis, pre_s)
+        # Fail before the fault, not after it, when the change log cannot be read.
+        probe_end = self._now()
+        self._fetch_changes(probe_end - timedelta(seconds=60), probe_end)
 
         onset = self._now()
         log.info("live_fault_inject", scenario_id=spec.scenario_id, repeat=repeat)
@@ -504,6 +551,8 @@ class LiveRunner:
 
         signals = read_signals(redis, onset - timedelta(seconds=pre_s), end)
         graph = read_graph(redis, end)
+        changes = self._fetch_changes(onset - timedelta(seconds=pre_s + CHANGE_LOOKBACK_S), end)
+        self._check_change_observed(spec, changes, onset, end)
         meta = FixtureMeta(
             scenario_id=spec.scenario_id,
             seed=spec.seed,
@@ -512,7 +561,7 @@ class LiveRunner:
             window_s=spec.duration_s + spec.cooldown_s,
             recorded_at=end,
         )
-        self._write(record_to, signals, graph, meta, pre_s=pre_s)
+        self._write(record_to, signals, graph, meta, pre_s=pre_s, changes=changes)
         edges = len(graph.snapshot()["edges"])
         log.info(
             "live_fixture_recorded",
@@ -523,6 +572,31 @@ class LiveRunner:
             edges=edges,
         )
         return Recording(record_to, meta, len(signals), edges)
+
+    @staticmethod
+    def _check_change_observed(
+        spec: ScenarioSpec, changes: Sequence[ChangeEvent], onset: datetime, end: datetime
+    ) -> None:
+        """Warn when a config-change fault left no change event on its target service.
+
+        Not an error: the fixture records what the live watcher saw, and a miss is part of
+        that. But it usually means the watcher is not running (`change_watcher_disabled`).
+        """
+        if not spec.config_change:
+            return
+        # The changed Deployment's name, e.g. "deployment/frontend" -> "frontend".
+        target = str(spec.config_change.get("resource", "")).rsplit("/", 1)[-1]
+        seen = any(
+            e.service == target and onset - timedelta(seconds=60) <= e.occurred_at <= end
+            for e in changes
+        )
+        if not seen:
+            log.warning(
+                "live_change_not_observed",
+                scenario_id=spec.scenario_id,
+                service=target,
+                hint="is the rca container's change watcher running? (docker logs inframind-rca)",
+            )
 
     def _wait_for_quiet(self, pre_s: float) -> None:
         """Sleep until the newest recording ended at least `pre_s` ago (module docstring)."""
@@ -632,14 +706,22 @@ class LiveRunner:
         meta: FixtureMeta,
         *,
         pre_s: float,
+        changes: Sequence[ChangeEvent] = (),
     ) -> None:
-        """Write `signals.ndjson.gz`, `graph.json`, `meta.json` (meta last: marks completion)."""
+        """Write the signals, graph, `changes.json` and `meta.json` (meta last: completion)."""
         if not signals:
             raise LiveRunnerError(f"{meta.scenario_id}: no signals in the recorded window")
         record_to.mkdir(parents=True, exist_ok=True)
         write_signals_gz(record_to / SIGNALS_GZ, signals)
         (record_to / "graph.json").write_text(json.dumps(graph.snapshot(), indent=2) + "\n")
-        provenance = {**meta.as_dict(), "baseline_s": pre_s, "recorded_live": True}
+        write_changes(record_to / CHANGES_JSON, changes)
+        provenance = {
+            **meta.as_dict(),
+            "baseline_s": pre_s,
+            "recorded_live": True,
+            "changes_recorded": True,
+            "change_events": len(changes),
+        }
         (record_to / "meta.json").write_text(json.dumps(provenance, indent=2) + "\n")
         (record_to / FAULT_MARKER).unlink(missing_ok=True)
 

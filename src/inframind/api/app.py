@@ -16,6 +16,7 @@ from redis.asyncio import Redis
 
 from inframind.alerting import AlertRouter
 from inframind.api.alertmanager import router as alertmanager_router
+from inframind.api.change_events import router as change_events_router
 from inframind.api.incidents import router as incidents_router
 from inframind.common.logging import configure_logging, get_logger
 
@@ -45,6 +46,7 @@ def create_app(
     app.state.alerting_router = alerting_router
     app.include_router(alertmanager_router)
     app.include_router(incidents_router)
+    app.include_router(change_events_router)
 
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:

@@ -25,12 +25,19 @@ from inframind.evaluation.runner.live import (
     build_chaos_manifest,
     chaos_resource_name,
     config_change_commands,
+    fetch_changes_from_api,
     fresh_history_start,
     read_signals,
 )
-from inframind.evaluation.runner.replay import replay_signals, signals_file, write_signals_gz
+from inframind.evaluation.runner.replay import (
+    load_change_events,
+    replay_signals,
+    signals_file,
+    write_signals_gz,
+)
 from inframind.evaluation.scenarios import load_set
 from inframind.evaluation.schema import FixtureMeta, ScenarioSpec
+from inframind.rca.change_correlation import ChangeEvent
 
 T0 = datetime(2026, 11, 16, 12, 0, tzinfo=UTC)
 
@@ -191,7 +198,13 @@ def _seed_bus(redis: Any, *, history_s: int, run_s: int) -> None:
 
 
 def _runner(
-    redis: Any, clock: FakeClock, kubectl: FakeKubectl, tmp_path: Path, **params: Any
+    redis: Any,
+    clock: FakeClock,
+    kubectl: FakeKubectl,
+    tmp_path: Path,
+    *,
+    fetch_changes: Any = None,
+    **params: Any,
 ) -> LiveRunner:
     kubeconfig = tmp_path / "kubeconfig"
     kubeconfig.write_text("")
@@ -209,6 +222,7 @@ def _runner(
         run_command=kubectl,
         now=clock.now,
         sleep=clock.sleep,
+        fetch_changes=fetch_changes or (lambda _start, _end: []),
     )
 
 
@@ -711,3 +725,98 @@ def test_a_recording_whose_fault_never_took_effect_is_not_scored(tmp_path: Path)
     assert (
         _run_one(spec=spec, params=params, repeat=0, run_baselines=True, run_ablations=False) == []
     )
+
+
+# --- change events (D22) ----------------------------------------------------------------
+
+
+def _rollout(at: datetime, service: str = "cartservice") -> ChangeEvent:
+    return ChangeEvent(
+        service=service,
+        kind="deployment_rollout",
+        resource=f"deploy/{service}",
+        occurred_at=at,
+        revision="7",
+    )
+
+
+def test_recording_copies_the_change_log_into_the_fixture(tmp_path: Path) -> None:
+    """`changes.json` holds what the watcher stored, over the ranker's 30 min pre-window."""
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=600)
+    windows: list[tuple[datetime, datetime]] = []
+
+    def fetch(start: datetime, end: datetime) -> list[ChangeEvent]:
+        windows.append((start, end))
+        return [_rollout(T0 + timedelta(seconds=2))]
+
+    spec = _spec("test-config-06-cartservice-bad-redis-addr")
+    target = tmp_path / "r0"
+    _runner(redis, FakeClock(T0), FakeKubectl(), tmp_path, fetch_changes=fetch).run_scenario(
+        spec, repeat=0, record_to=target
+    )
+
+    assert len(windows) == 2  # the probe before the fault, then the recording window
+    assert windows[0][1] == T0  # probed before injecting
+    assert windows[1][0] == T0 - timedelta(seconds=600 + 1800)
+    stored = json.loads((target / "changes.json").read_text())["events"]
+    assert [e["resource"] for e in stored] == ["deploy/cartservice"]
+    meta = json.loads((target / "meta.json").read_text())
+    assert (meta["changes_recorded"], meta["change_events"]) == (True, 1)
+    assert load_change_events(target / "changes.json") == [_rollout(T0 + timedelta(seconds=2))]
+
+
+def test_recording_refuses_before_the_fault_when_the_change_log_is_unreadable(
+    tmp_path: Path,
+) -> None:
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=600)
+    kubectl = FakeKubectl()
+
+    def down(_start: datetime, _end: datetime) -> list[ChangeEvent]:
+        raise LiveRunnerError("could not read change events")
+
+    runner = _runner(redis, FakeClock(T0), kubectl, tmp_path, fetch_changes=down)
+    with pytest.raises(LiveRunnerError, match="change events"):
+        runner.run_scenario(
+            _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path / "r0"
+        )
+    assert "apply" not in kubectl.verbs()  # no fault was injected
+
+
+def test_fetch_changes_from_api_reads_the_route(monkeypatch: pytest.MonkeyPatch) -> None:
+    import httpx
+
+    seen: dict[str, Any] = {}
+
+    def fake_get(url: str, *, params: dict[str, str], timeout: float) -> httpx.Response:
+        seen.update(url=url, params=params)
+        body = {"items": [_rollout(T0).model_dump(mode="json")]}
+        return httpx.Response(200, json=body, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr(httpx, "get", fake_get)
+    events = fetch_changes_from_api("http://api:8080/")(T0, T0 + timedelta(minutes=1))
+    assert events == [_rollout(T0)]
+    assert seen["url"] == "http://api:8080/change-events"
+    assert seen["params"]["start"] == T0.isoformat()
+
+
+def test_replay_ranks_with_the_recorded_change_events(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Replay hands `changes.json` to the ranker; a fixture without one passes none."""
+    from inframind.evaluation.runner import replay
+
+    redis = fakeredis.FakeRedis()
+    _seed_bus(redis, history_s=900, run_s=600)
+    spec = _spec("dev-podchaos-01-cartservice-pod-kill")
+    target = tmp_path / "r0"
+    rollout = _rollout(T0 + timedelta(seconds=1))
+    _runner(
+        redis, FakeClock(T0), FakeKubectl(), tmp_path, fetch_changes=lambda s, e: [rollout]
+    ).run_scenario(spec, repeat=0, record_to=target)
+
+    trace = replay.replay_trace(target, params=EvalParams())
+    assert trace.change_events == [rollout]
+    (target / "changes.json").unlink()
+    assert replay.replay_trace(target, params=EvalParams()).change_events == []

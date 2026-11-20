@@ -10,9 +10,9 @@ Hard rules encoded in the DDL itself:
 
 * **D20 — storage is the source of truth.** Every table here is authoritative. Redis
   Streams is the conduit that carries incidents to this layer, never a store.
-* **D22 — `change_events` is append-only.** The RCA stage writes those through a
-  separate table pinned in `docs/standards/14-change-correlation.md`; it is created by
-  the RCA worker, not here, because storage may not import `rca`'s watcher (DAG).
+* **D22 — `change_events` is append-only.** The K8s change watcher's events (standard
+  14.5): metadata only, no payload/data/value column, so no Secret value can be stored.
+  `storage/change_events.py` only inserts and selects.
 * **The audit log has no UPDATE or DELETE path.** `storage/audit.py` exposes only
   `record_audit`. The absence of an update method *is* the append-only guarantee at the
   application layer; a production Postgres role would additionally be granted
@@ -118,6 +118,22 @@ CREATE TABLE IF NOT EXISTS audit_log (
 
 CREATE INDEX IF NOT EXISTS audit_log_target_ts ON audit_log (target, ts DESC);
 CREATE INDEX IF NOT EXISTS audit_log_actor_ts ON audit_log (actor, ts DESC);
+
+-- change_events: append-only K8s change log (D22, standard 14.5). Metadata only.
+CREATE TABLE IF NOT EXISTS change_events (
+    id            BIGSERIAL PRIMARY KEY,
+    occurred_at   TIMESTAMPTZ NOT NULL,
+    service       TEXT NOT NULL,
+    kind          TEXT NOT NULL,
+    resource      TEXT NOT NULL,
+    revision      TEXT,
+    prev_revision TEXT,
+    detected_at   TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS change_events_service_time_idx
+    ON change_events (service, occurred_at DESC);
+CREATE INDEX IF NOT EXISTS change_events_time_idx ON change_events (occurred_at);
 """
 
 

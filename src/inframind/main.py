@@ -31,9 +31,11 @@ re-ranked deterministically and stored again.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import os
 import sys
 from collections.abc import Callable, Sequence
+from datetime import timedelta
 from typing import Any
 
 import asyncpg
@@ -41,17 +43,23 @@ import asyncpg
 from inframind.alerting import AlertRouter, load_alerting_params
 from inframind.common.incident import Incident
 from inframind.common.logging import configure_logging, get_logger
+from inframind.common.time import utcnow
 from inframind.llm import LLMParams, LLMSummary, explain, load_llm_params
 from inframind.llm.validator import template_summary
 from inframind.metrics import start_http_server as metrics_start_http_server
+from inframind.rca.change_correlation import ChangeEvent
+from inframind.rca.change_watcher import ChangeLog, build_change_watcher
 from inframind.rca.evidence import Candidate
 from inframind.rca.worker import IncidentAnalysis, run_worker, stop_on_signals
 from inframind.storage import (
+    StorageUnavailable,
     build_params,
     close_pool,
     create_pool,
     init_schema,
+    list_change_events,
     record_alerts,
+    record_change_event,
     record_summary,
     write_incident,
 )
@@ -211,9 +219,42 @@ async def amain() -> None:
             llm_base_url=llm_params.openai_base_url,
             ollama_fallback=llm_params.ollama_fallback,
         )
-        await run_worker(stop, on_analysis=pipeline)
+        change_log = await _seeded_change_log(pool)
+
+        async def persist_change(event: ChangeEvent) -> None:
+            await record_change_event(pool, event)
+
+        watcher = build_change_watcher(change_log, on_change=persist_change)
+        watcher_task = asyncio.create_task(watcher.run(stop)) if watcher is not None else None
+        try:
+            await run_worker(stop, on_analysis=pipeline, change_log=change_log)
+        finally:
+            if watcher_task is not None:
+                watcher_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await watcher_task
     finally:
         await close_pool(pool)
+
+
+async def _seeded_change_log(pool: asyncpg.Pool) -> ChangeLog:
+    """The change watcher's buffer, reseeded from Postgres (standard 14.8 cold path).
+
+    A restarted RCA process would otherwise forget a rollout made minutes before it came
+    back, and rank an incident that rollout caused without its `w4` term.
+    """
+    change_log = ChangeLog()
+    now = utcnow()
+    try:
+        change_log.extend(
+            await list_change_events(
+                pool, start=now - timedelta(seconds=change_log.retention_s), end=now
+            )
+        )
+    except StorageUnavailable as e:
+        log.warning("change_log_seed_failed", error=str(e))
+    log.info("change_log_seeded", events=len(change_log))
+    return change_log
 
 
 def main(argv: Sequence[str] | None = None) -> int:

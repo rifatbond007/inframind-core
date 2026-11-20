@@ -44,6 +44,7 @@ from inframind.common.logging import configure_logging, get_logger
 from inframind.metrics import start_http_server as metrics_start_http_server
 
 from .change_correlation import ChangeEvent
+from .change_watcher import ChangeLog
 from .config import RCAParams, load_rca_params
 from .evidence import Candidate
 from .graph import ServiceGraph
@@ -93,6 +94,7 @@ class RCAWorker:
         start_id: str = "0",
         change_events: Sequence[ChangeEvent] = (),
         on_analysis: AnalysisHook | None = None,
+        change_log: ChangeLog | None = None,
     ) -> None:
         self._redis = redis
         self._on_analysis = on_analysis
@@ -116,9 +118,10 @@ class RCAWorker:
             block_ms=block_ms,
             start_id=start_id,
         )
-        # Change events are injected (the K8s watcher lands with P8 packaging); the ranker
-        # reads them but the worker never fabricates one.
+        # Change events come from the K8s change watcher's buffer (`change_log`, D22) or a
+        # fixed list (tests); the ranker reads them but the worker never fabricates one.
         self._change_events: list[ChangeEvent] = list(change_events)
+        self._change_log = change_log
 
     # --- graph stream ---
 
@@ -174,7 +177,7 @@ class RCAWorker:
             symptoms,
             incident.anomalies,
             self._graph,
-            self._change_events,
+            self._change_log.events() if self._change_log is not None else self._change_events,
             window=window,
             params=self._params,
         )
@@ -236,7 +239,12 @@ def _symptom_services(incident: Incident) -> list[str]:
     return with_anomalies or sorted(incident.services)
 
 
-async def run_worker(stop: asyncio.Event, *, on_analysis: AnalysisHook | None = None) -> None:
+async def run_worker(
+    stop: asyncio.Event,
+    *,
+    on_analysis: AnalysisHook | None = None,
+    change_log: ChangeLog | None = None,
+) -> None:
     """Build the worker from env and run it until `stop` is set.
 
     Reads REDIS_URL, RCA_GRAPH_PATH and INFRAMIND_RCA_*. Shared by this module's `amain`
@@ -247,7 +255,7 @@ async def run_worker(stop: asyncio.Event, *, on_analysis: AnalysisHook | None = 
     graph = ServiceGraph(seed_path=graph_path, params=params)
     redis = Redis.from_url(os.environ.get("REDIS_URL", "redis://localhost:6379/0"))
 
-    worker = RCAWorker(redis, graph, params=params, on_analysis=on_analysis)
+    worker = RCAWorker(redis, graph, params=params, on_analysis=on_analysis, change_log=change_log)
     try:
         await worker.run(stop)
     finally:

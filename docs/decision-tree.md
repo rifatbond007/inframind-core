@@ -221,6 +221,14 @@ recency-weighted soft saturation. The result is a float in `[0, 1]`. The
 **Trigger to revisit:** if the project ever scales to multiple RCA replicas, the watcher
 becomes a separate `Deployment` with one replica. That is a D-change.
 
+**Implemented 2026-11-20** (`rca/change_watcher.py`; until then `w4` was 0 everywhere, live
+and in replay, which is why dev-11 missed 5/5). Two clarifications of the filter wording,
+pinned in standard 14.2: an `autoscaling/v2` HPA has no `.spec.replicas`, so HPA scaling is a
+change of `.status.desiredReplicas`; and Secrets are watched as `PartialObjectMetadata`, so the
+watcher never receives `.data`: a Secret counts as changed when its `resourceVersion` moves
+while its labels and annotations do not. Live recordings copy the stored change log into each
+fixture (`changes.json`), and replay ranks with it (a D7-Replay extension).
+
 ## D23-Scripts. A new top-level `scripts/` directory is permitted for dev-time tooling
 
 A top-level `scripts/` directory is permitted. It holds dev-time tooling — currently the
@@ -473,6 +481,8 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 - **D7-Replay** · 2026-10-21 · The evaluation harness's reproducibility mechanism is **signal-time replay** from an NDJSON fixture (`evaluation/fixtures/<scenario>/signals.ndjson`), not a cluster-backed re-run. `runner/replay.py` re-feeds a fixture through detection → correlation → ranking and is byte-identical across repeats. The live path (`runner/live.py`) asserts a `kind-*` kubeconfig context, refuses blocked scenarios, and ships with `run_scenario` as `NotImplementedError` pending the fixture recorder. · Why: the pipeline consumes the `Signal` stream's `ts` values end-to-end (D6 property), so pinning signal time pins the whole pipeline's output. Replay is the only path that runs green on a dev box with no docker daemon; live runs become a way to *produce* fixtures, not to score them. · Alternatives: (a) wall-clock re-runs — rejected, not reproducible across hosts. (b) mocking the pipeline — rejected, does not exercise the production path. · Status: approved by team (supervisor sign-off pending next sync). Cross-ref: `docs/standards/10-evaluation.md` §10.2; `tests/integration/test_evaluation_replay.py`.
 
 - **D26-Chaos-runtime-blocked** · 2026-10-21 · While D2-Chaos-runtime is still pending, the 6 Stress/NetworkChaos scenarios (dev-04..07, test-04..05) ship **written and marked blocked** (`status: blocked`, `# block_status: d2_chaos_runtime_docker`). The harness refuses to run them by default (exit code 3); with `--allow-blocked` it writes rows with `blocked=True` and `detected=False`, never a fabricated accuracy. The blocked marker is asserted by a test. · Why: recording the blocker as an artefact (rather than deleting the scenarios or silently scoring them zero) preserves D6's locked "≥12 distinct scenarios" promise while honouring PUKU.md's "never invent a number". · Alternatives: (a) delete the blocked scenarios — rejected, reduces dev to 4 and test to 4 scenarios and breaks the locked coverage. (b) score them as zero — rejected, fabricated number. · Status: approved by team as a P7 deliverable; the underlying D2-Chaos-runtime runtime change is still proposed. Cross-ref: `docs/standards/10-evaluation.md` §10.3; `test_blocked_scenarios_are_all_stress_or_network_chaos`.
+
+- **D22-Impl** · 2026-11-20 · The D22 K8s change watcher is built: in-process in the `rca` process (`rca/change_watcher.py`, list-then-watch over `httpx`, no new dependency), append-only `change_events` table and `GET /change-events` (read-only), seeded back into memory on restart. The compose `rca` container joins the `kind` network with a read-only ServiceAccount kubeconfig (`make watcher-kubeconfig`). Live recordings write `changes.json` per fixture and replay passes it to the ranker; a fixture without one replays with no change events. HPA scaling = `.status.desiredReplicas`; Secrets watched metadata-only (see D22). · Why: replay of dev-11 (a frontend config change) ranked the healthy callee first on all 5 repeats because `w4` was never fed; the watcher was specified but never implemented, so live had the same gap. · Alternatives: (a) synthesise the change event from the scenario YAML in replay only (rejected: uses the scenario spec, not an observation, and the deployed system would still lack `w4`); (b) re-weight `w3`/`w4` (rejected: tuning around a missing input); (c) amend D30 to down-weight a callee with no anomaly of its own (deferred). · Status: approved by the user 2026-11-20 (full option); supervisor follow-up.
 
 ### Proposed deviations from the July 2026 proposal (supervisor approval pending)
 

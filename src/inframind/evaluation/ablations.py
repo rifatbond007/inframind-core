@@ -24,6 +24,7 @@ from typing import Any
 
 from inframind.common.anomaly import Anomaly
 from inframind.correlation.config import CorrelationParams
+from inframind.rca.change_correlation import ChangeEvent
 from inframind.rca.config import RCAParams
 from inframind.rca.graph import ServiceGraph
 from inframind.rca.rank import rank_candidates
@@ -70,6 +71,7 @@ def rank_with_ablation(
     graph: ServiceGraph,
     window: tuple,
     rca: RCAParams,
+    change_events: Sequence[ChangeEvent] = (),
 ) -> list[Any]:
     """Rank with ablation `name` applied. Returns a list of `Candidate`.
 
@@ -86,6 +88,7 @@ def rank_with_ablation(
         symptoms=symptoms,
         anomalies=anomalies,
         graph=graph,
+        change_events=change_events,
         window=window,
         params=params,
     )

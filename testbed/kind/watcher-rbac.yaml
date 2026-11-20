@@ -1,0 +1,44 @@
+# The read-only identity the compose `rca` container uses for the K8s change watcher
+# (D22, standard 14.6). Same verbs and resources as the Helm chart's Role: get/list/watch
+# only, no write verb, no pods/exec. Applied by testbed/kind/watcher-kubeconfig.sh.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: inframind-change-watcher
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: inframind
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: inframind-change-watcher
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: inframind
+rules:
+  - apiGroups: [""]
+    resources: ["configmaps", "secrets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources: ["deployments", "statefulsets", "daemonsets"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: inframind-change-watcher
+  namespace: default
+  labels:
+    app.kubernetes.io/part-of: inframind
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: inframind-change-watcher
+subjects:
+  - kind: ServiceAccount
+    name: inframind-change-watcher
+    namespace: default

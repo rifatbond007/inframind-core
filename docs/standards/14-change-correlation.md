@@ -36,6 +36,14 @@ A change event is any state mutation to a service or its runtime configuration t
 
 A rolling update that creates 5 new pods is **one** event, not five. The watcher deduplicates by `(resource, revision|resourceVersion)`.
 
+**Pinned interpretations (D22-Impl, 2026-11-20):**
+
+- **HPA.** An `autoscaling/v2` HPA has no `.spec.replicas`; "scaling" is a change of `.status.desiredReplicas` (the count the HPA asks of its target). The event's service is `.spec.scaleTargetRef.name`; `revision` is the new count, `prev_revision` the old one.
+- **Secret.** Watched as `PartialObjectMetadata` (`Accept: application/json;as=PartialObjectMetadata;g=meta.k8s.io;v=v1`), so the API server never sends `.data` to the watcher. A Secret counts as changed when its `resourceVersion` moves while its labels and annotations do not. One update that changes labels and data together is missed; reading `.data` to catch it is not allowed (D9).
+- **Workload revision** is `metadata.generation` (it moves exactly when `.spec` changes); ConfigMap and Secret revisions are `resourceVersion`.
+- **Service attribution.** Workloads by name; HPAs by scale target; ConfigMaps/Secrets by the `app` or `app.kubernetes.io/name` label, else the first owner reference. One with none of those is skipped.
+- **Creation** of a workload, ConfigMap or HPA while watching is an event (`prev_revision` empty); creation of a Secret is not. The initial LIST, and a relist after `410 Gone`, only seed the comparison state.
+
 ## 14.3 Data source — a single K8s API watch
 
 A single consumer: the **`inframind-change-watcher`** (a small component that lives in the RCA worker pod — section 14.4). It opens watch streams on the resources listed in section 14.2, in the namespaces listed in `INFRAMIND_WATCH_NAMESPACES`.
@@ -178,6 +186,13 @@ The `change_correlation` step reads from the in-memory `change_events` ring buff
 - **D22 — namespaces are scoped.** `INFRAMIND_WATCH_NAMESPACES` is mandatory. A watcher that defaults to "all namespaces" is wrong.
 - **D22 — append-only.** The `change_events` table is never updated, never deleted. The audit-log discipline (D20) applies.
 
+## 14.9b Where it runs and how evaluation sees it
+
+- **Code:** `src/inframind/rca/change_watcher.py` (watcher, filter, `ChangeLog` ring buffer), `src/inframind/storage/change_events.py` (append + read), `src/inframind/api/change_events.py` (`GET /change-events?start=&end=[&service=]`, read-only). `inframind.main` seeds the buffer from Postgres (last hour) and persists each new event; a persistence error is logged and never stops the watch.
+- **Access:** `$KUBECONFIG` when it names a file, else the in-cluster ServiceAccount (Helm). Neither, or an empty `INFRAMIND_WATCH_NAMESPACES`, logs `change_watcher_disabled` and the RCA process runs with `w4` = 0.
+- **Compose testbed:** `make watcher-kubeconfig` (part of `make up`) applies `testbed/kind/watcher-rbac.yaml` (get/list/watch only) and writes `testbed/.kube/watcher/config` (gitignored, token valid 30 days); the `rca` container mounts it at `/kube` and joins the `kind` docker network. Re-run the target after the token expires or the cluster is recreated.
+- **Evaluation:** a live recording checks `GET /change-events` before injecting, then copies the events from `onset - baseline - 1800 s` to the end into the fixture as `changes.json`; replay passes them to `rank_candidates`. A config-change scenario with no event on its Deployment logs `live_change_not_observed`.
+
 ## 14.10 Tests
 
 ```
@@ -189,7 +204,7 @@ tests/unit/rca/test_change_correlation.py
     # assert: events outside the pre-window are ignored
     # assert: 3 events soft-saturate correctly
 
-tests/unit/rca/test_change_watcher_filter.py
+tests/unit/rca/test_change_watcher.py   # filter cases below, buffer, access, list-then-watch
     # Deployment status update -> not an event
     # ConfigMap annotation change -> not an event
     # Deployment .spec.template change -> one event

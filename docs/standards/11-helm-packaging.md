@@ -114,7 +114,7 @@ config:                         # rendered into the ConfigMap, consumed via envF
   ALERTMANAGER_WEBHOOK_URL: "http://inframind-api:8080/webhooks/alertmanager"
   METRICS_PORT: "9100"
   INFRAMIND_RCA_GRAPH_PATH: "/app/data/service-graph.json"
-  INFRAMIND_WATCH_NAMESPACES: "boutique,inframind"
+  INFRAMIND_WATCH_NAMESPACES: "default"   # the testbed's Boutique; mirror in rbac.watchNamespaces
 
 secretRef:
   LLM_API_KEY: ""               # set via `helm install --set secretRef.LLM_API_KEY=...`

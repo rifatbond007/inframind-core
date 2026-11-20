@@ -37,6 +37,7 @@ from inframind.common.signal import Signal
 from inframind.correlation.config import CorrelationParams
 from inframind.correlation.tracker import IncidentTracker
 from inframind.detection.engine import DetectionEngine
+from inframind.rca.change_correlation import ChangeEvent
 from inframind.rca.config import RCAParams
 from inframind.rca.graph import ServiceGraph
 from inframind.rca.rank import rank_candidates
@@ -98,6 +99,9 @@ class ReplayResult:
 
 
 #: A recording's signals: gzip-compressed (live recordings, committed) or plain (tests).
+#: The change events file a live recording writes (`runner/live.py`, D22).
+CHANGES_JSON = "changes.json"
+
 SIGNALS_GZ = "signals.ndjson.gz"
 SIGNALS_PLAIN = "signals.ndjson"
 
@@ -208,6 +212,9 @@ class ReplayTrace:
     incidents: list[Incident]
     #: Incidents that opened and resolved before the fault (ordinary noise, not detection).
     noise_incidents: list[Incident] = field(default_factory=list)
+    #: The K8s change events the live RCA process saw (`changes.json`, D22). Empty for a
+    #: fixture recorded before the change watcher existed.
+    change_events: list[ChangeEvent] = field(default_factory=list)
 
     @property
     def first_open(self) -> datetime:
@@ -288,7 +295,19 @@ def replay_trace(
         onset_ts=onset_ts,
         incidents=[i for i in incidents if i.id in live],
         noise_incidents=[i for i in incidents if i.id not in live],
+        change_events=load_change_events(fixture_dir / CHANGES_JSON),
     )
+
+
+def load_change_events(path: Path) -> list[ChangeEvent]:
+    """Read `changes.json`; a fixture without one has no change events (pre-D22 recording)."""
+    if not path.exists():
+        return []
+    try:
+        payload = json.loads(path.read_text())
+        return [ChangeEvent.model_validate(e) for e in payload["events"]]
+    except (ValueError, KeyError, TypeError) as e:
+        raise ReplayError(f"{path}: malformed change events: {e}") from e
 
 
 def compute_fault_window(onset_ts: datetime, duration_s: float) -> tuple[datetime, datetime]:
@@ -334,6 +353,7 @@ def replay_run(
             symptoms=trace.symptoms,
             anomalies=trace.incident_anomalies,
             graph=trace.graph,
+            change_events=trace.change_events,
             window=trace.incident_window,
             params=rca_params,
         )
