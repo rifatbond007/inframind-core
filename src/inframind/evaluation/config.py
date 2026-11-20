@@ -38,6 +38,10 @@ class EvalParams:
     # 10 samples and Prometheus is polled every 30 s), extra seconds after the cooldown so
     # the collectors publish the recovery, and where the Chaos Mesh CRs are created.
     baseline_s: float = 600.0
+    # The baseline must be unbroken: a gap longer than this between two `stream:signals`
+    # entries (the stack was down) ends it, so stale entries from before a restart never
+    # count. Four Prometheus polls.
+    baseline_max_gap_s: float = 120.0
     settle_s: float = 45.0
     chaos_namespace: str = "chaos-testing"
     # How long the recorder waits for proof that the fault took effect (Chaos Mesh

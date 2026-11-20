@@ -6,7 +6,8 @@ the paper is reproducible from `evaluation/fixtures/<scenario>/r<repeat>/` alone
 
 One recording (`LiveRunner.run_scenario`):
 
-1. **Baseline.** Wait until `stream:signals` holds at least `pre_s` seconds of history
+1. **Baseline.** Wait until `stream:signals` holds at least `pre_s` seconds of unbroken
+   history (no gap over `baseline_max_gap_s`, so entries from before a restart don't count)
    (`max(spec.warmup_s, EvalParams.baseline_s)`; the detectors need 10 samples and the
    Prometheus collector polls every 30 s, so the default is 600 s), **and** until the end
    of the newest recording under `fixture_dir` is at least `pre_s` in the past, so no
@@ -94,6 +95,7 @@ __all__ = [
     "chaos_injection_state",
     "chaos_resource_name",
     "config_change_commands",
+    "fresh_history_start",
     "latest_recording_end",
     "list_blocked_reasons",
     "read_graph",
@@ -256,14 +258,55 @@ def read_graph(redis: Any, end: datetime) -> ServiceGraph:
     return graph
 
 
-def oldest_signal_at(redis: Any) -> datetime | None:
-    """When the oldest entry still in `stream:signals` was published, or None if empty."""
-    page = redis.xrange(stream_keys.SIGNALS, min="-", max="+", count=1)
-    if not page:
+def _entry_ms(entry_id: Any) -> int:
+    """Milliseconds part of a Redis stream entry id (`<ms>-<seq>`)."""
+    text = entry_id.decode() if isinstance(entry_id, bytes) else str(entry_id)
+    return int(text.split("-")[0])
+
+
+def fresh_history_start(
+    redis: Any, now: datetime, *, lookback_s: float, max_gap_s: float
+) -> datetime | None:
+    """Start of the unbroken run of `stream:signals` entries that reaches up to `now`.
+
+    Walks entries published in `[now - lookback_s - max_gap_s, now]` from newest to oldest
+    and stops at the first gap longer than `max_gap_s`. Entries left over from before a
+    restart are separated from fresh ones by such a gap, so they never count as baseline
+    (reading only the oldest entry counted them: dev-03, 2026-11-17).
+
+    Returns None when no entry was published in the last `max_gap_s` (collectors down).
+    The result is never earlier than the window start, so a caller only learns whether at
+    least `lookback_s` of unbroken history exists, not how much more.
+    """
+    now_ms = int(now.timestamp() * 1000)
+    floor_ms = now_ms - int((lookback_s + max_gap_s) * 1000)
+    gap_ms = max_gap_s * 1000
+    newest = now_ms
+    cursor: str = str(now_ms)
+    seen_any = False
+    while True:
+        page = redis.xrevrange(
+            stream_keys.SIGNALS, max=cursor, min=str(floor_ms), count=_XRANGE_PAGE
+        )
+        if not page:
+            break
+        for entry_id, _ in page:
+            ms = _entry_ms(entry_id)
+            if newest - ms > gap_ms:
+                return None if not seen_any else _from_ms(newest)
+            newest = ms
+            seen_any = True
+        if len(page) < _XRANGE_PAGE:
+            break
+        last = page[-1][0]
+        last = last.decode() if isinstance(last, bytes) else str(last)
+        cursor = "(" + last
+    if not seen_any:
         return None
-    first = page[0][0]
-    first = first.decode() if isinstance(first, bytes) else str(first)
-    ms = int(first.split("-")[0])
+    return _from_ms(newest)
+
+
+def _from_ms(ms: int) -> datetime:
     return datetime.fromtimestamp(ms / 1000, tz=utcnow().tzinfo)
 
 
@@ -492,12 +535,25 @@ class LiveRunner:
             self._sleep(missing)
 
     def _wait_for_baseline(self, redis: Any, pre_s: float) -> None:
-        """Sleep until `stream:signals` holds `pre_s` seconds of history before the onset."""
-        oldest = oldest_signal_at(redis)
-        if oldest is None:
-            raise LiveRunnerError("stream:signals is empty; start the collectors (`make up`)")
-        missing = pre_s - (self._now() - oldest).total_seconds()
-        if missing > 0:
+        """Sleep until `stream:signals` holds `pre_s` seconds of unbroken, fresh history.
+
+        Re-checks after every sleep, so a collector outage during the wait restarts it.
+
+        Raises:
+            LiveRunnerError: nothing was published in the last `baseline_max_gap_s`.
+        """
+        max_gap_s = self._params.baseline_max_gap_s
+        while True:
+            now = self._now()
+            start = fresh_history_start(redis, now, lookback_s=pre_s, max_gap_s=max_gap_s)
+            if start is None:
+                raise LiveRunnerError(
+                    f"no signal published in the last {max_gap_s:.0f} s; "
+                    "start the collectors (`make up`)"
+                )
+            missing = pre_s - (now - start).total_seconds()
+            if missing <= 0:
+                return
             log.info("live_waiting_for_baseline", seconds=round(missing, 1))
             self._sleep(missing)
 

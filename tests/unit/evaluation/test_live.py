@@ -25,6 +25,7 @@ from inframind.evaluation.runner.live import (
     build_chaos_manifest,
     chaos_resource_name,
     config_change_commands,
+    fresh_history_start,
     read_signals,
 )
 from inframind.evaluation.runner.replay import replay_signals, signals_file, write_signals_gz
@@ -381,7 +382,7 @@ def test_run_scenario_applies_and_undoes_a_config_change(tmp_path: Path) -> None
 
 def test_run_scenario_refuses_an_empty_bus(tmp_path: Path) -> None:
     runner = _runner(fakeredis.FakeRedis(), FakeClock(T0), FakeKubectl(), tmp_path)
-    with pytest.raises(LiveRunnerError, match="stream:signals is empty"):
+    with pytest.raises(LiveRunnerError, match="start the collectors"):
         runner.run_scenario(
             _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path / "r0"
         )
@@ -432,6 +433,91 @@ def test_main_live_records_every_repeat_and_skips_blocked(
     assert [(c[0], c[1]) for c in calls] == [(sid, r) for r in range(5)]
     assert calls[3][2] == tmp_path / "fx" / sid / "r3"
     assert not (tmp_path / "results").exists()
+
+
+def test_main_live_dry_run_prints_the_plan_and_records_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`--live --dry-run` never builds a LiveRunner (no kubectl, no Redis, no fault)."""
+    import inframind.evaluation.runner.live as live
+    from inframind.evaluation.runner import main as main_mod
+
+    class ExplodingRunner:
+        def __init__(self, **_: Any) -> None:
+            raise AssertionError("--dry-run must not construct a LiveRunner")
+
+    monkeypatch.setattr(live, "LiveRunner", ExplodingRunner)
+    monkeypatch.setenv("INFRAMIND_EVAL_FIXTURE_DIR", str(tmp_path / "fx"))
+    monkeypatch.setenv("INFRAMIND_EVAL_RESULTS_DIR", str(tmp_path / "results"))
+    sid = "dev-podchaos-01-cartservice-pod-kill"
+    blocked = "dev-stresschaos-04-cartservice-cpu-stress"
+    existing = tmp_path / "fx" / sid / "r0"
+    existing.mkdir(parents=True)
+    write_signals_gz(existing / "signals.ndjson.gz", [_signal(T0)])
+
+    argv = ["--set", "dev", "--live", "--dry-run", "--scenario", sid, "--scenario", blocked]
+    assert main_mod.main(argv) == 0
+
+    out = capsys.readouterr().out
+    assert f"{sid} r0  skip (fixture exists)" in out
+    assert all(f"{sid} r{r}  record" in out for r in range(1, 5))
+    assert f"{blocked}  skip (blocked" in out
+    assert sorted(p.name for p in (tmp_path / "fx").iterdir()) == [sid]  # nothing new
+    assert not (tmp_path / "results").exists()
+
+
+def test_fresh_history_ignores_entries_from_before_a_restart() -> None:
+    """Yesterday's entries sit behind a gap, so only the fresh run counts (the dev-03 bug)."""
+    redis = fakeredis.FakeRedis()
+    for offset in range(-90_000, -86_000, 30):  # an hour of history, a day ago
+        _xadd(redis, stream_keys.SIGNALS, T0 + timedelta(seconds=offset), "{}")
+    for offset in range(-120, 1, 30):  # two minutes since the restart
+        _xadd(redis, stream_keys.SIGNALS, T0 + timedelta(seconds=offset), "{}")
+
+    start = fresh_history_start(redis, T0, lookback_s=600, max_gap_s=120)
+    assert start == T0 - timedelta(seconds=120)
+
+
+def test_fresh_history_is_capped_at_the_lookback_and_none_when_stale() -> None:
+    redis = fakeredis.FakeRedis()
+    for offset in range(-3_600, 1, 30):
+        _xadd(redis, stream_keys.SIGNALS, T0 + timedelta(seconds=offset), "{}")
+    start = fresh_history_start(redis, T0, lookback_s=600, max_gap_s=120)
+    assert start is not None
+    assert T0 - start >= timedelta(seconds=600)
+    # Ten minutes later with nothing published: the collectors are down.
+    later = T0 + timedelta(seconds=600)
+    assert fresh_history_start(redis, later, lookback_s=600, max_gap_s=120) is None
+    assert fresh_history_start(fakeredis.FakeRedis(), T0, lookback_s=600, max_gap_s=120) is None
+
+
+def test_run_scenario_waits_out_a_restart_gap(tmp_path: Path) -> None:
+    """Stale history before a 1 h outage is ignored: it waits the full baseline again."""
+    redis = fakeredis.FakeRedis()
+    for offset in range(-7_200, -3_600, 30):  # before the outage
+        _xadd(
+            redis,
+            stream_keys.SIGNALS,
+            T0 + timedelta(seconds=offset),
+            _signal(T0).model_dump_json(),
+        )
+    _seed_bus(redis, history_s=100, run_s=1500)  # after the restart
+    clock = FakeClock(T0)
+    recording = _runner(redis, clock, FakeKubectl(), tmp_path).run_scenario(
+        _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path / "r0"
+    )
+    assert clock.slept[0] == pytest.approx(500.0)
+    assert recording.meta.onset_ts == T0 + timedelta(seconds=500)
+
+
+def test_run_scenario_refuses_when_the_collectors_are_down(tmp_path: Path) -> None:
+    redis = fakeredis.FakeRedis()
+    _xadd(redis, stream_keys.SIGNALS, T0 - timedelta(hours=2), "{}")
+    runner = _runner(redis, FakeClock(T0), FakeKubectl(), tmp_path)
+    with pytest.raises(LiveRunnerError, match="start the collectors"):
+        runner.run_scenario(
+            _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path / "r0"
+        )
 
 
 def test_back_to_back_repeats_keep_the_previous_fault_out_of_the_baseline(
