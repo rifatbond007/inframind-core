@@ -1,0 +1,10 @@
+{
+  "scenario_id": "dev-config-10-productcatalogservice-extra-latency",
+  "seed": 1010,
+  "repeat": 1,
+  "onset_ts": "2026-11-20T14:45:09.286747+00:00",
+  "window_s": 300.0,
+  "recorded_at": "2026-11-20T14:50:56.967180+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true
+}

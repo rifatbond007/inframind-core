@@ -1,0 +1,57 @@
+{
+  "edges": [
+    {
+      "caller": "checkoutservice",
+      "callee": "productcatalogservice",
+      "weight": 2.6895317726188446,
+      "observations": 1581,
+      "stub": false,
+      "last_observed_at": "2026-11-20T13:49:00.781940+00:00"
+    },
+    {
+      "caller": "frontend",
+      "callee": "checkoutservice",
+      "weight": 76.11949976248519,
+      "observations": 652,
+      "stub": false,
+      "last_observed_at": "2026-11-20T13:49:00.775438+00:00"
+    },
+    {
+      "caller": "frontend",
+      "callee": "productcatalogservice",
+      "weight": 5.537795303766634,
+      "observations": 75070,
+      "stub": false,
+      "last_observed_at": "2026-11-20T13:49:22.688697+00:00"
+    },
+    {
+      "caller": "frontend",
+      "callee": "recommendationservice",
+      "weight": 25.802614106509438,
+      "observations": 11395,
+      "stub": false,
+      "last_observed_at": "2026-11-20T13:49:00.791636+00:00"
+    },
+    {
+      "caller": "recommendationservice",
+      "callee": "productcatalogservice",
+      "weight": 11.019253518702222,
+      "observations": 11303,
+      "stub": false,
+      "last_observed_at": "2026-11-20T13:49:00.791991+00:00"
+    }
+  ],
+  "callers": {
+    "checkoutservice": [
+      "frontend"
+    ],
+    "productcatalogservice": [
+      "checkoutservice",
+      "frontend",
+      "recommendationservice"
+    ],
+    "recommendationservice": [
+      "frontend"
+    ]
+  }
+}

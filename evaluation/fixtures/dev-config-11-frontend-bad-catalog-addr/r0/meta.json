@@ -1,0 +1,10 @@
+{
+  "scenario_id": "dev-config-11-frontend-bad-catalog-addr",
+  "seed": 1011,
+  "repeat": 0,
+  "onset_ts": "2026-11-20T15:48:20.843017+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-20T15:53:27.467285+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true
+}
