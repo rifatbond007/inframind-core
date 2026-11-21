@@ -1,0 +1,12 @@
+{
+  "events": [
+    {
+      "service": "inframind-watcher-probe",
+      "kind": "configmap_change",
+      "resource": "cm/inframind-watcher-probe-s3p277xh",
+      "occurred_at": "2026-11-21T02:38:42.426191Z",
+      "revision": "246389",
+      "prev_revision": "246385"
+    }
+  ]
+}
