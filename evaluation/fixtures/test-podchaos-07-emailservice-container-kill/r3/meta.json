@@ -1,0 +1,12 @@
+{
+  "scenario_id": "test-podchaos-07-emailservice-container-kill",
+  "seed": 2007,
+  "repeat": 3,
+  "onset_ts": "2026-11-21T06:12:33.157330+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-21T06:17:20.657506+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true,
+  "changes_recorded": true,
+  "change_events": 0
+}
