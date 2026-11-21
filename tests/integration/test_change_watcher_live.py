@@ -1,10 +1,12 @@
 """Live change-watcher check on the kind testbed (D22, standard 14.10).
 
 Needs `make up` (kind + the compose stack with a running change watcher). Creates a
-throwaway ConfigMap labelled `app=frontend` in `default`, changes its data, deletes it, and
-asserts exactly one `configmap_change` reaches Postgres through `GET /change-events`, and
-that it moves the frontend's change-correlation score from 0 to above 0.5. Skips when the
-cluster or the API is unreachable. kubectl only ever targets the `kind-inframind` context.
+throwaway ConfigMap in `default`, changes its data, deletes it, and asserts exactly one
+`configmap_change` reaches Postgres through `GET /change-events`, and that it moves the probe
+service's change-correlation score from 0 to above 0.5. The ConfigMap is labelled
+`app=inframind-watcher-probe`, never a real service, so a probe that runs before a live
+recording cannot leak into a fixture as a change on a Boutique service. Skips when the cluster
+or the API is unreachable. kubectl only ever targets the `kind-inframind` context.
 """
 
 from __future__ import annotations
@@ -27,6 +29,7 @@ pytestmark = pytest.mark.integration
 
 CONTEXT = "kind-inframind"
 KUBECONFIG = Path(__file__).resolve().parents[2] / "testbed" / ".kube" / "config"
+PROBE_SERVICE = "inframind-watcher-probe"
 API = os.environ.get("INFRAMIND_API_URL", "http://localhost:8080")
 
 
@@ -67,7 +70,7 @@ def test_a_configmap_data_change_lands_in_postgres(testbed: None) -> None:
     start = utcnow()
     try:
         assert _kubectl("create", "configmap", name, "--from-literal=k=v1").returncode == 0
-        assert _kubectl("label", "configmap", name, "app=frontend").returncode == 0
+        assert _kubectl("label", "configmap", name, f"app={PROBE_SERVICE}").returncode == 0
         assert _kubectl("annotate", "configmap", name, "note=x").returncode == 0  # not a change
         time.sleep(1)
         changed = _kubectl("patch", "configmap", name, "-p", '{"data":{"k":"v2"}}')
@@ -82,7 +85,7 @@ def test_a_configmap_data_change_lands_in_postgres(testbed: None) -> None:
 
     assert len(mine) == 1, "expected exactly the data change (create/label/annotate are not)"
     event = mine[0]
-    assert (event.service, event.kind) == ("frontend", "configmap_change")
+    assert (event.service, event.kind) == (PROBE_SERVICE, "configmap_change")
     window = (event.occurred_at, event.occurred_at + timedelta(minutes=5))
-    assert change_correlation("frontend", window, []) == 0.0
-    assert change_correlation("frontend", window, mine) > 0.5
+    assert change_correlation(PROBE_SERVICE, window, []) == 0.0
+    assert change_correlation(PROBE_SERVICE, window, mine) > 0.5
