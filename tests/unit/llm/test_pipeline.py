@@ -103,6 +103,8 @@ def test_build_call_skips_primary_when_no_api_key(
     monkeypatch: __import__("pytest").MonkeyPatch,
 ) -> None:
 
+    # Both names count as a key (`llm_api_key`); a Codespaces secret sets LLM_API_KEY.
+    monkeypatch.delenv("LLM_API_KEY", raising=False)
     monkeypatch.delenv("OPENAI_API_KEY", raising=False)
     params = LLMParams(provider="OPENAI")
     called = {"primary": 0, "fallback": 0}
