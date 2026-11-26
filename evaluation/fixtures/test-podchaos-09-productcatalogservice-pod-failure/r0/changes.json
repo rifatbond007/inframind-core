@@ -1,0 +1,44 @@
+{
+  "events": [
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T20:48:52.749239Z",
+      "revision": "8",
+      "prev_revision": "7"
+    },
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T20:54:05.714308Z",
+      "revision": "9",
+      "prev_revision": "8"
+    },
+    {
+      "service": "inframind-watcher-probe",
+      "kind": "configmap_change",
+      "resource": "cm/inframind-watcher-probe-q3p8bdpk",
+      "occurred_at": "2026-11-26T20:55:11.073918Z",
+      "revision": "13518",
+      "prev_revision": "13515"
+    },
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T21:05:51.231563Z",
+      "revision": "10",
+      "prev_revision": "9"
+    },
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T21:11:07.582106Z",
+      "revision": "11",
+      "prev_revision": "10"
+    }
+  ]
+}

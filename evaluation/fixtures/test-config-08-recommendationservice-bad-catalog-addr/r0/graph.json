@@ -1,0 +1,17 @@
+{
+  "edges": [
+    {
+      "caller": "frontend",
+      "callee": "productcatalogservice",
+      "weight": 0.581585017342783,
+      "observations": 10,
+      "stub": false,
+      "last_observed_at": "2026-11-26T19:32:19.798497+00:00"
+    }
+  ],
+  "callers": {
+    "productcatalogservice": [
+      "frontend"
+    ]
+  }
+}

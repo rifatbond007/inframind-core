@@ -1,0 +1,68 @@
+{
+  "events": [
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T20:14:55.832646Z",
+      "revision": "4",
+      "prev_revision": "3"
+    },
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T20:20:08.444613Z",
+      "revision": "5",
+      "prev_revision": "4"
+    },
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T20:31:54.219067Z",
+      "revision": "6",
+      "prev_revision": "5"
+    },
+    {
+      "service": "inframind-watcher-probe",
+      "kind": "configmap_change",
+      "resource": "cm/inframind-watcher-probe-zv5p6rxr",
+      "occurred_at": "2026-11-26T20:35:14.755236Z",
+      "revision": "11109",
+      "prev_revision": "11106"
+    },
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T20:37:06.835815Z",
+      "revision": "7",
+      "prev_revision": "6"
+    },
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T20:48:52.749239Z",
+      "revision": "8",
+      "prev_revision": "7"
+    },
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T20:54:05.714308Z",
+      "revision": "9",
+      "prev_revision": "8"
+    },
+    {
+      "service": "inframind-watcher-probe",
+      "kind": "configmap_change",
+      "resource": "cm/inframind-watcher-probe-q3p8bdpk",
+      "occurred_at": "2026-11-26T20:55:11.073918Z",
+      "revision": "13518",
+      "prev_revision": "13515"
+    }
+  ]
+}
