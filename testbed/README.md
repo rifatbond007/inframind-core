@@ -228,6 +228,10 @@ Things to know:
   `make codespace-logs` or `make codespace-ports` running during a long recording.
 - **Quota.** Compute is billed per core-hour while the codespace runs (a 4-core machine uses 4
   per hour); a stopped codespace bills storage only. `make codespace-delete` removes it.
+- **Traffic first.** Run `make loadgen-on` about 10 minutes before `make eval-live`; the
+  recorder refuses to inject when the baseline has fewer than 100 traced calls
+  (`INFRAMIND_EVAL_MIN_BASELINE_GRAPH_UPDATES`), because Boutique's load generator is off by
+  default and a fixture recorded without it has a one-edge graph.
 - **One host per scenario.** Record all repeats of a scenario on the same host, and state the
   host in the threats-to-validity paragraph (D31 risk).
 - The image comes from GHCR (`make image-pull`, run on every codespace start) when CI has

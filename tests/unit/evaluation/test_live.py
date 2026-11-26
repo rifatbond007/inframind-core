@@ -215,6 +215,8 @@ def _runner(
                 "baseline_s": 600.0,
                 "settle_s": 45.0,
                 "fixture_dir": str(tmp_path / "fixtures"),
+                # _seed_bus publishes only 3 graph updates; the traffic guard has its own tests.
+                "min_baseline_graph_updates": 0,
                 **params,
             }
         ),
@@ -350,6 +352,68 @@ def test_run_scenario_records_a_replayable_fixture(tmp_path: Path) -> None:
     assert [(e["caller"], e["callee"], e["observations"]) for e in graph["edges"]] == [
         ("checkoutservice", "cartservice", 3)
     ]
+
+
+def _seed_traffic(redis: Any, *, calls: int, window_s: int = 600) -> None:
+    """Publish `calls` graph updates spread over the `window_s` seconds before T0.
+
+    Call it before `_seed_bus`, which writes graph updates at T0: stream ids must grow.
+    """
+    update = GraphUpdate(caller="frontend", callee="cartservice", latency_ms=2.0, observed_at=T0)
+    for i in range(calls):
+        at = T0 - timedelta(seconds=window_s * (calls - i) / (calls + 1))  # ascending ids
+        _xadd(redis, stream_keys.GRAPH_UPDATES, at, update.model_dump_json(), seq=100 + i)
+
+
+def test_refuses_to_inject_without_traffic(tmp_path: Path) -> None:
+    """Load generator off: a handful of traced calls, so no fault and no fixture."""
+    redis = fakeredis.FakeRedis()
+    _seed_traffic(redis, calls=5)
+    _seed_bus(redis, history_s=900, run_s=600)  # +3 graph updates at T0
+    kubectl = FakeKubectl()
+    spec = _spec("dev-podchaos-01-cartservice-pod-kill")
+    target = tmp_path / spec.scenario_id / "r0"
+    runner = _runner(redis, FakeClock(T0), kubectl, tmp_path, min_baseline_graph_updates=100)
+
+    with pytest.raises(LiveRunnerError, match="load generator"):
+        runner.run_scenario(spec, repeat=0, record_to=target)
+
+    assert kubectl.verbs() == []  # nothing applied to the cluster
+    assert not target.exists()  # no fault-started marker, no fixture
+
+
+def test_injects_when_the_baseline_carries_traffic(tmp_path: Path) -> None:
+    redis = fakeredis.FakeRedis()
+    _seed_traffic(redis, calls=150)
+    _seed_bus(redis, history_s=900, run_s=600)
+    kubectl = FakeKubectl()
+    spec = _spec("dev-podchaos-01-cartservice-pod-kill")
+    runner = _runner(redis, FakeClock(T0), kubectl, tmp_path, min_baseline_graph_updates=100)
+
+    runner.run_scenario(spec, repeat=0, record_to=tmp_path / "r0")
+
+    assert kubectl.verbs() == ["apply", "get", "delete"]
+
+
+def test_traffic_older_than_the_baseline_window_does_not_count(tmp_path: Path) -> None:
+    """Calls from before the window (e.g. an earlier session) are not this baseline's."""
+    redis = fakeredis.FakeRedis()
+    update = GraphUpdate(caller="frontend", callee="cartservice", latency_ms=2.0, observed_at=T0)
+    for i in range(200):  # all 11.5-15 min before the fault, ascending ids
+        _xadd(
+            redis,
+            stream_keys.GRAPH_UPDATES,
+            T0 - timedelta(seconds=900 - i),
+            update.model_dump_json(),
+            seq=i,
+        )
+    _seed_bus(redis, history_s=900, run_s=600)
+    runner = _runner(redis, FakeClock(T0), FakeKubectl(), tmp_path, min_baseline_graph_updates=100)
+
+    with pytest.raises(LiveRunnerError, match="traced calls"):
+        runner.run_scenario(
+            _spec("dev-podchaos-01-cartservice-pod-kill"), repeat=0, record_to=tmp_path / "r0"
+        )
 
 
 def test_run_scenario_waits_for_a_full_baseline(tmp_path: Path) -> None:

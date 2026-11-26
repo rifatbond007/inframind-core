@@ -43,6 +43,11 @@ class EvalParams:
     # count. Four Prometheus polls.
     baseline_max_gap_s: float = 120.0
     settle_s: float = 45.0
+    # The baseline must also carry real traffic: at least this many traced calls on
+    # `stream:graph-updates` in the `pre_s` window before the fault. With Boutique's load
+    # generator off (its slim-profile default) only a handful arrive and the fixture's graph
+    # has one edge instead of five (test-08, 2026-11-27). 0 disables the check.
+    min_baseline_graph_updates: int = 100
     chaos_namespace: str = "chaos-testing"
     # The InfraMind API the recorder reads the K8s change log from (`GET /change-events`,
     # D22), so a fixture carries the change events the live RCA process ranked with.

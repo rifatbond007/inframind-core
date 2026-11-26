@@ -40,6 +40,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   counted signals from before a stack restart.
 - `pre-commit run --all-files` rejected the multi-document watcher RBAC manifest.
 - `make help` printed no targets (it read an undefined `$(MAKEFILE)`).
+- `make eval-live` recorded without traffic when Boutique's load generator was off (its
+  default), giving one-edge graphs (test-08, test-09 r0); it now refuses to inject unless the
+  baseline holds at least 100 traced calls. New `make loadgen-on|loadgen-off|loadgen-status`.
 - The LLM key named `LLM_API_KEY` in `.env.example` and Helm was never read.
 - The Docker image shipped no LLM prompt template.
 - Acknowledging/resolving an incident failed (`''::jsonb`), and resolved incidents could

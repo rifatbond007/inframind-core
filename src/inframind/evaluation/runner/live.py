@@ -14,7 +14,10 @@ One recording (`LiveRunner.run_scenario`):
    earlier fault (another repeat or scenario) lies inside this run's baseline window.
    Back-to-back repeats 287 s apart once put the previous kill inside the next baseline:
    the incident opened before the fault and every later repeat scored a false 0 s
-   latency.
+   latency. The baseline must also carry **traffic**: at least
+   `EvalParams.min_baseline_graph_updates` traced calls on `stream:graph-updates` in that
+   window, or the run refuses before any fault (Boutique's load generator is off by
+   default; `make loadgen-on`).
 2. **Inject** at `onset_ts`: apply the Chaos Mesh CR built from `spec.chaos`
    (`build_chaos_manifest`), or apply `spec.config_change` with `kubectl set env`, then
    **confirm it took effect**: the CR must reach `AllInjected=True` (a `Failed` record aborts
@@ -532,6 +535,7 @@ class LiveRunner:
         pre_s = max(spec.warmup_s, self._params.baseline_s)
         self._wait_for_quiet(pre_s)
         self._wait_for_baseline(redis, pre_s)
+        self._check_traffic(redis, pre_s)
         # Fail before the fault, not after it, when the change log cannot be read.
         probe_end = self._now()
         self._fetch_changes(probe_end - timedelta(seconds=60), probe_end)
@@ -630,6 +634,33 @@ class LiveRunner:
                 return
             log.info("live_waiting_for_baseline", seconds=round(missing, 1))
             self._sleep(missing)
+
+    def _check_traffic(self, redis: Any, pre_s: float) -> None:
+        """Refuse to inject unless the baseline window carries real traced traffic.
+
+        Counts `stream:graph-updates` entries published in the last `pre_s` seconds. Without
+        Boutique's load generator the testbed sees almost no calls, and a fixture recorded
+        then has a one-edge graph that no earlier fixture had.
+
+        Raises:
+            LiveRunnerError: fewer than `min_baseline_graph_updates` calls in the window.
+        """
+        need = self._params.min_baseline_graph_updates
+        if need <= 0:
+            return
+        now_ms = _ms(self._now())
+        seen = sum(
+            1
+            for _ in _iter_stream(
+                redis, stream_keys.GRAPH_UPDATES, now_ms - int(pre_s * 1000), now_ms
+            )
+        )
+        log.info("live_baseline_traffic", graph_updates=seen, required=need, window_s=pre_s)
+        if seen < need:
+            raise LiveRunnerError(
+                f"only {seen} traced calls in the last {pre_s:.0f} s (need >= {need}): is "
+                "Boutique's load generator running? `make loadgen-on`, wait 10 min, retry"
+            )
 
     def _inject(self, spec: ScenarioSpec, repeat: int) -> Callable[[], None]:
         """Apply the fault, confirm it took effect, and return the callable that reverts it.

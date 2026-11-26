@@ -236,6 +236,27 @@ boutique-status: ## show Boutique + Redis pods (--context kind-inframind)
 	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
 		get pods -n default -l app.kubernetes.io/part-of=boutique -o wide
 
+# Boutique's load generator is 0 replicas in the slim profile (memory). Recordings need it:
+# without traffic a fixture's graph has one edge, and `make eval-live` refuses to inject
+# (EvalParams.min_baseline_graph_updates). Turn it on about 10 min before recording.
+.PHONY: loadgen-on loadgen-off loadgen-status
+loadgen-on: ## start Boutique's load generator (needed before eval-live; ~10 min warm-up)
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+		-n default scale deploy/loadgenerator --replicas=1
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+		-n default rollout status deploy/loadgenerator --timeout=180s
+	@echo "loadgen-on: traffic started; wait ~10 min before make eval-live"
+
+loadgen-off: ## stop Boutique's load generator (back to the slim default)
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+		-n default scale deploy/loadgenerator --replicas=0
+
+loadgen-status: ## show the load generator's replicas and pod age
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+		-n default get deploy/loadgenerator -o custom-columns=REPLICAS:.spec.replicas,READY:.status.readyReplicas --no-headers
+	@kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
+		-n default get pods -l app=loadgenerator --no-headers 2>/dev/null || true
+
 boutique-delete: ## delete all Boutique + Redis resources (D5 reset; also handled by make down via cluster delete)
 	@kubectl kustomize testbed/boutique \
 		| kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \

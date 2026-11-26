@@ -280,6 +280,7 @@ hand-built graph + anomalies.
 | `INFRAMIND_EVAL_SETS` | `("dev", "test")` | The set names resolved by `--set all` (advanced; the CLI owns it). |
 | `INFRAMIND_EVAL_RUN_BASELINES` | `true` | Whether the runner reports six baseline rows in addition to `infra`. |
 | `INFRAMIND_EVAL_RUN_ABLATIONS` | `true` | Whether `--ablation` produces the four ablation rows. |
+| `INFRAMIND_EVAL_MIN_BASELINE_GRAPH_UPDATES` | 100 | Live recording only: the traced calls (`stream:graph-updates` entries) the baseline window must hold before a fault is injected; 0 disables. Boutique's load generator is off by default, so run `make loadgen-on` about 10 min before `make eval-live`. |
 
 ## 10.8 Makefile targets
 
