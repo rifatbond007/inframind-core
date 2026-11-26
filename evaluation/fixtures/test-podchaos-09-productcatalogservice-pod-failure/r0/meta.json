@@ -1,0 +1,12 @@
+{
+  "scenario_id": "test-podchaos-09-productcatalogservice-pod-failure",
+  "seed": 2009,
+  "repeat": 0,
+  "onset_ts": "2026-11-26T21:22:52.740126+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-26T21:27:40.476778+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true,
+  "changes_recorded": true,
+  "change_events": 5
+}

@@ -9,6 +9,7 @@ Public surface:
 * `create_pool`, `init_schema`, `close_pool`, `StorageUnavailable` — connection lifecycle.
 * `write_incident`, `transition_incident`, `get_incident`, `list_incidents` — incidents.
 * `record_audit` — append-only audit log (no update, no delete).
+* `record_change_event`, `list_change_events` — the append-only K8s change log (D22).
 
 The `llm` module may not import this one (DAG, standards 01 §1.3); `alerting` may not
 either. Only `api` reaches storage directly, and it does so through these functions.
@@ -17,6 +18,7 @@ either. Only `api` reaches storage directly, and it does so through these functi
 from __future__ import annotations
 
 from .audit import record_audit
+from .change_events import list_change_events, record_change_event
 from .config import (
     DEFAULT_POSTGRES_URL,
     StorageParams,
@@ -53,11 +55,13 @@ __all__ = [
     "eval_scenario_id",
     "get_incident",
     "init_schema",
+    "list_change_events",
     "list_incidents",
     "load_storage_params",
     "postgres_url",
     "record_alerts",
     "record_audit",
+    "record_change_event",
     "record_summary",
     "transition_incident",
     "write_incident",

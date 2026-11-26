@@ -1,0 +1,12 @@
+{
+  "scenario_id": "test-config-08-recommendationservice-bad-catalog-addr",
+  "seed": 2008,
+  "repeat": 4,
+  "onset_ts": "2026-11-26T21:05:50.890394+00:00",
+  "window_s": 360.0,
+  "recorded_at": "2026-11-26T21:12:52.226301+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true,
+  "changes_recorded": true,
+  "change_events": 8
+}

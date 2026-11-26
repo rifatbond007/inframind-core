@@ -1,4 +1,4 @@
-"""The six InfraMind Prometheus metrics (standard 11 section 11.6) plus a text-exposition helper.
+"""The eight InfraMind Prometheus metrics (standard 11 section 11.6) plus a text-exposition helper.
 
 Every InfraMind process ships these. The api process appends `render_extra()` to its hand-rolled
 `/metrics`; every worker process serves the same registry over its own `/metrics` on port 9100
@@ -16,6 +16,11 @@ both hard-code them:
 | `inframind_rca_ranking_duration_seconds` | Histogram | none | `rca.rank.rank_candidates` |
 | `inframind_llm_call_duration_seconds` | Histogram | none | `llm.pipeline.explain` |
 | `inframind_alerts_sent_total` | Counter | `channel`, `severity` | `alerting.router.dispatch` |
+| `inframind_graph_call_latency_seconds` | Histogram | `caller`, `callee` | `rca.worker.apply_graph_update` |
+| `inframind_call_errors_total` | Counter | `caller`, `callee` | `detection.call_error.update` |
+
+The two edge metrics draw the service graph in Grafana: one series per observed `caller ->
+callee` edge (D2 direction), so their cardinality is bounded by the service count squared.
 
 Instrumentation is deliberately thin: each increment is one `.labels(...).inc()` at the site
 that already knows the value. Nothing here queries Prometheus, nothing here stores state, and
@@ -100,7 +105,22 @@ ALERTS_SENT = Counter(
     registry=REGISTRY,
 )
 
-#: Every metric this module owns, for the test that asserts the set is exactly these six.
+GRAPH_CALL_LATENCY = Histogram(
+    "inframind_graph_call_latency_seconds",
+    "Latency of each observed caller -> callee call folded into the RCA service graph (D21).",
+    ["caller", "callee"],
+    buckets=DURATION_BUCKETS,
+    registry=REGISTRY,
+)
+
+CALL_ERRORS = Counter(
+    "inframind_call_errors",
+    "Failing client calls the call_error detector counted against their callee (D30).",
+    ["caller", "callee"],
+    registry=REGISTRY,
+)
+
+#: Every metric this module owns, for the test that asserts the set is exactly these eight.
 ALL_METRICS: tuple[Any, ...] = (
     SIGNALS_RECEIVED,
     ANOMALIES_EMITTED,
@@ -108,13 +128,15 @@ ALL_METRICS: tuple[Any, ...] = (
     RCA_RANKING_DURATION,
     LLM_CALL_DURATION,
     ALERTS_SENT,
+    GRAPH_CALL_LATENCY,
+    CALL_ERRORS,
 )
 
 _CONTENT_TYPE = "text/plain; version=0.0.4; charset=utf-8"
 
 
 def render_extra() -> str:
-    """Return the six InfraMind metrics in Prometheus text exposition format.
+    """Return the eight InfraMind metrics in Prometheus text exposition format.
 
     The api process appends this to its hand-rolled `/metrics` body, which already carries
     `inframind_up` and `inframind_uptime_seconds`. Workers call `render_extra()` indirectly
@@ -122,7 +144,7 @@ def render_extra() -> str:
     is the api's seam.
 
     With no samples recorded, `prometheus_client` still emits the `# HELP` / `# TYPE` lines for
-    each family, so the six names are always present. That is deliberate: a scrape finding a
+    each family, so the eight names are always present. That is deliberate: a scrape finding a
     metric *missing* should mean "the family was never registered", which is a bug, rather than
     "nothing has happened yet".
 
@@ -173,6 +195,18 @@ def observe_llm_call(duration_s: float) -> None:
     """Record an LLM call duration in seconds. Never raises."""
     with contextlib.suppress(Exception):
         LLM_CALL_DURATION.observe(duration_s)
+
+
+def observe_graph_call(caller: str, callee: str, latency_s: float) -> None:
+    """Record one observed `caller -> callee` call and its latency in seconds. Never raises."""
+    with contextlib.suppress(Exception):
+        GRAPH_CALL_LATENCY.labels(caller=caller, callee=callee).observe(latency_s)
+
+
+def record_call_error(caller: str, callee: str) -> None:
+    """Count one failing client call from `caller` to `callee`. Never raises."""
+    with contextlib.suppress(Exception):
+        CALL_ERRORS.labels(caller=caller, callee=callee).inc()
 
 
 def start_http_server(port: int = WORKER_METRICS_PORT, addr: str = "0.0.0.0") -> Any:

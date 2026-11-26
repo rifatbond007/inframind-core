@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
 
+from inframind import metrics
 from inframind.common.signal import Severity, Signal, SignalType, Source
 from inframind.detection.call_error import CallErrorDetector, grpc_callee
 from inframind.detection.config import ErrorSpikeParams
@@ -74,3 +75,27 @@ def test_server_spans_and_self_calls_are_not_attributed() -> None:
     ]  # cartservice calling CartService is not a downstream failure
     assert server == [None] * 6
     assert own == [None] * 6
+
+
+def _call_errors(caller: str, callee: str) -> float:
+    return metrics.CALL_ERRORS.labels(caller=caller, callee=callee)._value.get()
+
+
+def test_every_attributed_failing_call_is_counted_for_the_service_graph() -> None:
+    """Each failing call counts once, before any spike fires (Grafana draws the edge red)."""
+    d = CallErrorDetector(ErrorSpikeParams(min_count=3))
+    d.update(metric("cartservice"))
+    before = _call_errors("frontend", "cartservice")
+    for i in range(2):  # below min_count: no anomaly yet, but both calls are real failures
+        assert d.update(span(1 + i, n=i)) is None
+    assert _call_errors("frontend", "cartservice") == before + 2
+
+
+def test_unattributed_spans_are_not_counted() -> None:
+    """An unknown callee, a server span or a self-call never becomes a graph edge."""
+    d = CallErrorDetector(ErrorSpikeParams(min_count=3))
+    before = _call_errors("frontend", "cartservice")
+    d.update(span(1))  # cartservice never seen: unknown callee
+    d.update(metric("cartservice"))
+    d.update(span(2, kind="server"))
+    assert _call_errors("frontend", "cartservice") == before

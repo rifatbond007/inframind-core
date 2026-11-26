@@ -1,0 +1,19 @@
+{
+  "scenario_id": "test-podchaos-01-checkoutservice-pod-kill",
+  "seed": 2001,
+  "repeat": 2,
+  "onset_ts": "2026-11-21T02:03:35.588376+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-21T02:08:21.244608+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true,
+  "changes_recorded": true,
+  "change_events": 0,
+  "change_events_removed": [
+    {
+      "resource": "cm/inframind-watcher-probe-eqh30vc3",
+      "occurred_at": "2026-11-21T01:33:50.168491Z",
+      "reason": "integration-test probe ConfigMap (tests/integration/test_change_watcher_live.py), not part of the scenario"
+    }
+  ]
+}

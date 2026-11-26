@@ -38,8 +38,15 @@ class EvalParams:
     # 10 samples and Prometheus is polled every 30 s), extra seconds after the cooldown so
     # the collectors publish the recovery, and where the Chaos Mesh CRs are created.
     baseline_s: float = 600.0
+    # The baseline must be unbroken: a gap longer than this between two `stream:signals`
+    # entries (the stack was down) ends it, so stale entries from before a restart never
+    # count. Four Prometheus polls.
+    baseline_max_gap_s: float = 120.0
     settle_s: float = 45.0
     chaos_namespace: str = "chaos-testing"
+    # The InfraMind API the recorder reads the K8s change log from (`GET /change-events`,
+    # D22), so a fixture carries the change events the live RCA process ranked with.
+    api_url: str = "http://localhost:8080"
     # How long the recorder waits for proof that the fault took effect (Chaos Mesh
     # `AllInjected`, or a new Deployment generation observed) before it gives up.
     inject_timeout_s: float = 180.0

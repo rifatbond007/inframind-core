@@ -51,7 +51,9 @@ config:
   METRICS_PORT: "9100"
   # Per-stage tuning. Keyed INFRAMIND_<LAYER>_<FIELD>; see docs/surface-map.md.
   INFRAMIND_RCA_GRAPH_PATH: "/app/data/service-graph.json"
-  INFRAMIND_WATCH_NAMESPACES: "boutique,inframind"
+  # The change watcher's namespaces (D22). The testbed runs Online Boutique in `default`;
+  # each one outside the release namespace also needs an entry in rbac.watchNamespaces.
+  INFRAMIND_WATCH_NAMESPACES: "default"
   # LLM explainer (read by the rca process, D28): an OpenAI-compatible API, Groq by
   # default. The key comes from secretRef.LLM_API_KEY. No local Ollama fallback.
   LLM_PROVIDER: "openai"
@@ -117,7 +119,7 @@ ingress:
   tls: []
 
 # --- observability ---
-# The six metrics (standard 11 section 11.12) come from `inframind.metrics`, which every
+# The eight metrics (standard 11 section 11.12) come from `inframind.metrics`, which every
 # process registers at import time.
 metrics:
   enabled: true
@@ -156,8 +158,9 @@ securityContext:
 rbac:
   create: true
   # D22: change correlation watches these six resource kinds. Read-only — no write, no exec.
-  # A Role that needs pods/exec is wrong (standard 11 section 11.5).
-  watchNamespaces: []
+  # A Role that needs pods/exec is wrong (standard 11 section 11.5). Keep in sync with
+  # config.INFRAMIND_WATCH_NAMESPACES: a namespaced Role only grants its own namespace.
+  watchNamespaces: ["default"]
 
 serviceAccount:
   create: true

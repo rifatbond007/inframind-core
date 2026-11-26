@@ -1,0 +1,20 @@
+{
+  "events": [
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T19:57:57.375852Z",
+      "revision": "2",
+      "prev_revision": "1"
+    },
+    {
+      "service": "recommendationservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/recommendationservice",
+      "occurred_at": "2026-11-26T20:03:10.261438Z",
+      "revision": "3",
+      "prev_revision": "2"
+    }
+  ]
+}

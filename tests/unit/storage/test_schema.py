@@ -17,7 +17,7 @@ import re
 from inframind.storage.incidents import _incident_record_args
 from inframind.storage.schema import INIT_SQL
 
-TABLES = ("incidents", "candidates", "evidence", "alerts", "audit_log")
+TABLES = ("incidents", "candidates", "evidence", "alerts", "audit_log", "change_events")
 
 
 def _columns(table: str) -> set[str]:
@@ -153,3 +153,29 @@ def test_evidence_kind_check_matches_the_model() -> None:
     import typing
 
     assert ddl_kinds == set(typing.get_args(EvidenceKind))
+
+
+def test_change_events_table_is_metadata_only() -> None:
+    """Standard 14.5: no payload/data/value column, so no Secret value can be stored (D9)."""
+    assert _columns("change_events") == {
+        "id",
+        "occurred_at",
+        "service",
+        "kind",
+        "resource",
+        "revision",
+        "prev_revision",
+        "detected_at",
+    }
+
+
+def test_change_events_storage_has_no_update_or_delete() -> None:
+    """D22: the change log is append-only, like the audit log (D20)."""
+    import inspect
+
+    from inframind.storage import change_events
+
+    source = inspect.getsource(change_events)
+    assert not re.search(r"\bUPDATE\s+change_events\b", source, re.IGNORECASE)
+    assert not re.search(r"\bDELETE\s+FROM\s+change_events\b", source, re.IGNORECASE)
+    assert not re.search(r"\bTRUNCATE\b", source, re.IGNORECASE)

@@ -1,0 +1,12 @@
+{
+  "scenario_id": "test-config-06-cartservice-bad-redis-addr",
+  "seed": 2006,
+  "repeat": 3,
+  "onset_ts": "2026-11-21T04:53:37.157861+00:00",
+  "window_s": 360.0,
+  "recorded_at": "2026-11-21T05:00:53.697200+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true,
+  "changes_recorded": true,
+  "change_events": 6
+}

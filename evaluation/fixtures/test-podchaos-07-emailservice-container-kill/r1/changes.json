@@ -1,0 +1,20 @@
+{
+  "events": [
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T05:10:54.300884Z",
+      "revision": "10",
+      "prev_revision": "9"
+    },
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T05:16:25.417516Z",
+      "revision": "11",
+      "prev_revision": "10"
+    }
+  ]
+}

@@ -43,6 +43,8 @@ class ChangeEvent(BaseModel):
     resource: str
     occurred_at: datetime
     revision: str | None = Field(default=None)
+    #: The revision this change replaced, when the watcher saw it (standard 14.5).
+    prev_revision: str | None = Field(default=None)
 
     @field_validator("service")
     @classmethod

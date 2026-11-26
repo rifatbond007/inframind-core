@@ -1,10 +1,10 @@
-"""`/metrics` on the api process — the hand-rolled head plus the six pipeline metrics.
+"""`/metrics` on the api process — the hand-rolled head plus the eight pipeline metrics.
 
 The endpoint is two concatenated blocks (standard 11 section 11.12):
 
 1. The dependency-free head the P6 testbed always scraped — `inframind_up` and
    `inframind_uptime_seconds`. This block must stay byte-identical; it is a P6 contract.
-2. `inframind.metrics.render_extra()` — the six metrics from `inframind.metrics`.
+2. `inframind.metrics.render_extra()` — the eight metrics from `inframind.metrics`.
 
 `/metrics` touches neither Redis nor Postgres, so a `FakeAsyncRedis` and no pool are enough.
 """

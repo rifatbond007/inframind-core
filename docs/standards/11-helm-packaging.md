@@ -114,7 +114,7 @@ config:                         # rendered into the ConfigMap, consumed via envF
   ALERTMANAGER_WEBHOOK_URL: "http://inframind-api:8080/webhooks/alertmanager"
   METRICS_PORT: "9100"
   INFRAMIND_RCA_GRAPH_PATH: "/app/data/service-graph.json"
-  INFRAMIND_WATCH_NAMESPACES: "boutique,inframind"
+  INFRAMIND_WATCH_NAMESPACES: "default"   # the testbed's Boutique; mirror in rbac.watchNamespaces
 
 secretRef:
   LLM_API_KEY: ""               # set via `helm install --set secretRef.LLM_API_KEY=...`
@@ -174,6 +174,16 @@ endpoint. Every stage exports Prometheus metrics:
 - `inframind_rca_ranking_duration_seconds` (histogram)
 - `inframind_llm_call_duration_seconds` (histogram)
 - `inframind_alerts_sent_total` (per channel, per severity)
+- `inframind_graph_call_latency_seconds` (histogram, per `caller`, `callee`): one observation
+  per call edge the RCA worker folds into the service graph (D21); `_count` is the edge's call
+  rate, the buckets give its p95 latency
+- `inframind_call_errors_total` (per `caller`, `callee`): failing client calls the
+  `call_error` detector attributes to their callee (D30), including callees that emit no
+  traces
+
+The two edge metrics feed the service graph on the testbed's "InfraMind / Incidents"
+Grafana dashboard. Their labels are canonical service names in the D2 direction
+(`caller -> callee`), so cardinality is bounded by the number of services squared.
 
 The `ServiceMonitor` selector matches the chart's labels.
 
@@ -236,11 +246,11 @@ CI secrets, never from a committed file.
 - **Dockerfile:** the repo-root `Dockerfile`. There is no `deploy/docker/` directory — one
   image serves every process, and the orchestrator picks the entrypoint via `command:`.
 
-## 11.12 The six metrics and how the chart scrapes them
+## 11.12 The eight metrics and how the chart scrapes them
 
-`src/inframind/metrics.py` declares exactly six families against a **private**
-`CollectorRegistry`. The names are pinned here, in `Chart.yaml`'s annotations,
-and in `tests/unit/test_metrics.py`.
+`src/inframind/metrics.py` declares exactly eight families against a **private**
+`CollectorRegistry`. The names are pinned here, in the `metrics.py` module
+docstring, and in `tests/unit/test_metrics.py`.
 
 | Metric | Type | Labels | Increment site |
 |---|---|---|---|
@@ -250,6 +260,8 @@ and in `tests/unit/test_metrics.py`.
 | `inframind_rca_ranking_duration_seconds` | Histogram | none | `rca/rank.py::rank_candidates` |
 | `inframind_llm_call_duration_seconds` | Histogram | none | `llm/pipeline.py::explain` |
 | `inframind_alerts_sent_total` | Counter | `channel`, `severity` | `alerting/router.py::dispatch` |
+| `inframind_graph_call_latency_seconds` | Histogram | `caller`, `callee` | `rca/worker.py::apply_graph_update` |
+| `inframind_call_errors_total` | Counter | `caller`, `callee` | `detection/call_error.py::update` |
 
 Three rules about the instrumentation:
 

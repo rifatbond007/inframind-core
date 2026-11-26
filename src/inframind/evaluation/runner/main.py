@@ -93,7 +93,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--dry-run",
         action="store_true",
-        help="load scenarios and print the plan without replaying",
+        help="print the plan without replaying (or, with --live, without recording)",
     )
     return parser
 
@@ -354,6 +354,27 @@ def _run_one(
     return rows
 
 
+def _print_live_plan(specs: Sequence[ScenarioSpec], params: EvalParams) -> None:
+    """Print what `--live` would do for each (scenario, repeat), touching nothing.
+
+    Mirrors `_record_live`'s skip rules: blocked scenarios (unless allowed) and repeats that
+    already hold a fixture (unless overwriting).
+    """
+    from ..scenarios import fixture_dir_for
+
+    for spec in specs:
+        if spec.is_blocked and not params.allow_blocked:
+            print(f"  {spec.scenario_id}  skip (blocked: {spec.block_reason})")
+            continue
+        for repeat in range(params.repeats):
+            target = fixture_dir_for(spec, params, repeat)
+            if has_signals(target) and not params.allow_overwrite:
+                action = "skip (fixture exists)"
+            else:
+                action = "record"
+            print(f"  {spec.scenario_id} r{repeat}  {action}  -> {target}")
+
+
 def _record_live(specs: Sequence[ScenarioSpec], params: EvalParams) -> int:
     """Record one fixture per (scenario, repeat) that has none yet. Returns an exit code."""
     from ..scenarios import fixture_dir_for
@@ -429,6 +450,10 @@ def main(argv: list[str] | None = None) -> int:
             runnable=len(runnable_specs),
             blocked=blocked_count,
         )
+
+        if args.live and args.dry_run:  # the recording plan; no kubectl, no Redis
+            _print_live_plan(specs, params)
+            continue
 
         if args.live:  # recording skips blocked scenarios (logged) rather than refusing
             code = _record_live(specs, params)

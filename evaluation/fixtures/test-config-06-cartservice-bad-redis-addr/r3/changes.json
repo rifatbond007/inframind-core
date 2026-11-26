@@ -1,0 +1,52 @@
+{
+  "events": [
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T04:19:04.867345Z",
+      "revision": "4",
+      "prev_revision": "3"
+    },
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T04:24:35.769398Z",
+      "revision": "5",
+      "prev_revision": "4"
+    },
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T04:36:20.913016Z",
+      "revision": "6",
+      "prev_revision": "5"
+    },
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T04:41:51.826014Z",
+      "revision": "7",
+      "prev_revision": "6"
+    },
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T04:53:37.534765Z",
+      "revision": "8",
+      "prev_revision": "7"
+    },
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T04:59:08.685154Z",
+      "revision": "9",
+      "prev_revision": "8"
+    }
+  ]
+}

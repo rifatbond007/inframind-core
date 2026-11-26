@@ -1,0 +1,10 @@
+{
+  "scenario_id": "dev-podchaos-09-currencyservice-pod-failure",
+  "seed": 1009,
+  "repeat": 0,
+  "onset_ts": "2026-11-20T13:15:21.828344+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-20T13:20:09.322291+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true
+}

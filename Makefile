@@ -90,9 +90,14 @@ test-all: ## run all tests including integration
 # the cluster side. The recipe just runs Compose (no k8s dependency)
 # after the deps land.
 .PHONY: up
-up: kind obs boutique chaos ## bring up Compose + the full testbed chain
+up: kind obs boutique chaos watcher-kubeconfig ## bring up Compose + the full testbed chain
 	$(COMPOSE) up -d
 	@echo "Stack + testbed up. Try: make smoke-testbed"
+
+.PHONY: watcher-kubeconfig
+watcher-kubeconfig: ## read-only kubeconfig for the compose rca change watcher (D22)
+	@TESTBED_CLUSTER_NAME=$(TESTBED_CLUSTER_NAME) TESTBED_CONTEXT=$(TESTBED_CONTEXT) \
+	 TESTBED_KUBECONFIG=$(TESTBED_KUBECONFIG) testbed/kind/watcher-kubeconfig.sh
 
 .PHONY: down
 down: ## stop Compose + delete the kind cluster (full reset, incl. volumes)

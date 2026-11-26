@@ -1,0 +1,12 @@
+{
+  "scenario_id": "test-podchaos-01-checkoutservice-pod-kill",
+  "seed": 2001,
+  "repeat": 3,
+  "onset_ts": "2026-11-21T02:18:21.267014+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-21T02:23:06.766306+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true,
+  "changes_recorded": true,
+  "change_events": 0
+}

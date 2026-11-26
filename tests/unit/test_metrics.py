@@ -1,4 +1,4 @@
-"""The six Prometheus metrics (standard 11 section 11.12).
+"""The eight Prometheus metrics (standard 11 section 11.6).
 
 These tests are deliberately registry-tolerant: `inframind.metrics` registers its families at
 import time against a module-level registry, so incrementing a counter in one test changes the
@@ -11,10 +11,10 @@ from __future__ import annotations
 from inframind import metrics
 
 
-def test_module_owns_exactly_the_six_pinned_metrics() -> None:
-    """The six metric names are pinned by standard 11 section 11.12. Adding a seventh is a
+def test_module_owns_exactly_the_eight_pinned_metrics() -> None:
+    """The eight metric names are pinned by standard 11 section 11.6. Adding a ninth is a
     standards change, not a code change."""
-    assert len(metrics.ALL_METRICS) == 6
+    assert len(metrics.ALL_METRICS) == 8
     names = {m._name for m in metrics.ALL_METRICS}
     assert names == {
         "inframind_signals_received",
@@ -23,10 +23,12 @@ def test_module_owns_exactly_the_six_pinned_metrics() -> None:
         "inframind_rca_ranking_duration_seconds",
         "inframind_llm_call_duration_seconds",
         "inframind_alerts_sent",
+        "inframind_graph_call_latency_seconds",
+        "inframind_call_errors",
     }
 
 
-def test_render_extra_always_contains_all_six_families() -> None:
+def test_render_extra_always_contains_all_eight_families() -> None:
     """A scrape finding a metric *missing* should mean "never registered" (a bug), not
     "nothing has happened yet". So the families are present before any sample."""
     body = metrics.render_extra()
@@ -37,6 +39,8 @@ def test_render_extra_always_contains_all_six_families() -> None:
         "inframind_rca_ranking_duration_seconds",
         "inframind_llm_call_duration_seconds",
         "inframind_alerts_sent",
+        "inframind_graph_call_latency_seconds",
+        "inframind_call_errors",
     ):
         assert name in body, f"render_extra() is missing {name}"
 
@@ -76,6 +80,28 @@ def test_record_helpers_are_idempotent_under_duplicate_registration() -> None:
     assert after == before + 2
 
 
+def test_observe_graph_call_counts_the_edge_and_its_latency() -> None:
+    child = metrics.GRAPH_CALL_LATENCY.labels(caller="unit-a", callee="unit-b")
+    before_count = _histogram_count(child)
+    before_sum = child._sum.get()
+    metrics.observe_graph_call("unit-a", "unit-b", 0.02)
+    assert _histogram_count(child) == before_count + 1
+    assert child._sum.get() == before_sum + 0.02
+
+
+def test_record_call_error_increments_the_edge_counter() -> None:
+    before = metrics.CALL_ERRORS.labels(caller="unit-a", callee="unit-b")._value.get()
+    metrics.record_call_error("unit-a", "unit-b")
+    after = metrics.CALL_ERRORS.labels(caller="unit-a", callee="unit-b")._value.get()
+    assert after == before + 1
+
+
+def test_edge_helpers_never_raise() -> None:
+    """A bad label value must not raise into the RCA worker or a detector."""
+    metrics.observe_graph_call(None, "unit-b", 0.01)  # type: ignore[arg-type]
+    metrics.record_call_error("unit-a", None)  # type: ignore[arg-type]
+
+
 def test_start_http_server_survives_a_bad_port() -> None:
     """A worker that cannot bind metrics must still be a worker. Returns None, does not raise."""
     assert metrics.start_http_server(port=-1) is None
@@ -101,3 +127,8 @@ def _bump(kind: str) -> bool:
         metrics.record_alert("console", "INFO")
         after = metrics.ALERTS_SENT.labels(channel="console", severity="INFO")._value.get()
     return after == before + 1
+
+
+def _histogram_count(child: object) -> float:
+    """Total observations of a labelled histogram child (the sum of its bucket counts)."""
+    return sum(b.get() for b in child._buckets)  # type: ignore[attr-defined]

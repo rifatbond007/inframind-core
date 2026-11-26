@@ -1,0 +1,10 @@
+{
+  "scenario_id": "dev-podchaos-08-recommendationservice-pod-kill",
+  "seed": 1008,
+  "repeat": 4,
+  "onset_ts": "2026-11-17T17:31:01.642153+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-17T17:35:49.164747+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true
+}

@@ -129,13 +129,23 @@ services:
       LLM_TIMEOUT_S: ${LLM_TIMEOUT_S:-20}
       INFRAMIND_LLM_OLLAMA_FALLBACK: ${INFRAMIND_LLM_OLLAMA_FALLBACK:-false}
       INFRAMIND_ALERTING_WEBHOOK_URL: ${INFRAMIND_ALERTING_WEBHOOK_URL:-}
+      # K8s change watcher (D22): the RCA w4 term. A read-only ServiceAccount kubeconfig
+      # written by `make watcher-kubeconfig` (part of `make up`); without it the watcher
+      # logs `change_watcher_disabled` and w4 stays 0. The Boutique runs in `default`.
+      KUBECONFIG: /kube/config
+      INFRAMIND_WATCH_NAMESPACES: ${INFRAMIND_WATCH_NAMESPACES:-default}
     extra_hosts: *common-extra-hosts
+    # The `kind` network reaches the API server at inframind-control-plane:6443.
+    networks:
+      - default
+      - kind
     # D21 cold start: the directory the RCA worker reads service-graph.json from and writes it
     # back to. A missing file is a cold graph, never a crash. A named volume, not a host bind
     # mount: the image runs as uid 10001 and a host-owned ./data was not writable, so the
     # snapshot failed with "Permission denied" (the chart uses an emptyDir the same way).
     volumes:
       - graph-data:/app/data
+      - ./testbed/.kube/watcher:/kube:ro
     depends_on:
       redis:
         condition: service_healthy
@@ -192,3 +202,9 @@ volumes:
   redis-data:
   postgres-data:
   graph-data:
+
+networks:
+  # kind's docker network (created by `make kind`), joined by the rca container only, so
+  # its change watcher can reach the API server. `make up` creates it before compose runs.
+  kind:
+    external: true

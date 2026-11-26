@@ -1,0 +1,36 @@
+{
+  "events": [
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T04:01:48.682223Z",
+      "revision": "2",
+      "prev_revision": "1"
+    },
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T04:07:19.545714Z",
+      "revision": "3",
+      "prev_revision": "2"
+    },
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T04:19:04.867345Z",
+      "revision": "4",
+      "prev_revision": "3"
+    },
+    {
+      "service": "cartservice",
+      "kind": "deployment_rollout",
+      "resource": "deploy/cartservice",
+      "occurred_at": "2026-11-21T04:24:35.769398Z",
+      "revision": "5",
+      "prev_revision": "4"
+    }
+  ]
+}

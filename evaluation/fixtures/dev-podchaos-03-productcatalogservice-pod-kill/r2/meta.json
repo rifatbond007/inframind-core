@@ -1,0 +1,10 @@
+{
+  "scenario_id": "dev-podchaos-03-productcatalogservice-pod-kill",
+  "seed": 1003,
+  "repeat": 2,
+  "onset_ts": "2026-11-17T13:34:19.285852+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-17T13:39:07.406276+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true
+}

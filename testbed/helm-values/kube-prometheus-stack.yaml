@@ -133,6 +133,11 @@ grafana:
   # local-only so this is fine. The standard 09 §9.6 "no real secrets"
   # rule still applies — don't ship a production password here.
   adminPassword: prom-operator
+  # The chart's ~27 default dashboards (Kubernetes / *, Node Exporter / *,
+  # etcd, CoreDNS, ...) are not used by InfraMind and bury the one that is.
+  # Only testbed/obs/dashboards/ (loaded by install.sh) is shown. Set to
+  # true to bring the community dashboards back.
+  defaultDashboardsEnabled: false
   resources:
     limits:
       cpu: 200m
@@ -175,6 +180,25 @@ grafana:
       type: jaeger
       url: http://jaeger-query:16686
       access: proxy
+    # InfraMind's own output (incidents, RCA candidates, evidence, alerts,
+    # change events) lives in the compose Postgres (D20), published on the
+    # host's :5432 and reached from kind via KIND_HOST_GATEWAY, the same
+    # route Prometheus uses to scrape the compose processes. The credentials
+    # are the compose dev-only defaults, never a real secret (standard 09).
+    # The "InfraMind / Incidents" dashboard reads it by this uid.
+    - name: InfraMind Postgres
+      uid: inframind-postgres
+      type: postgres
+      url: KIND_HOST_GATEWAY:5432
+      user: inframind
+      access: proxy
+      jsonData:
+        database: inframind
+        sslmode: disable
+        postgresVersion: 1600
+        timescaledb: false
+      secureJsonData:
+        password: inframind
 
 # --- node-exporter, kube-state-metrics, etc. (chart defaults are fine) ---
 nodeExporter:

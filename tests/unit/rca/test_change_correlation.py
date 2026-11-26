@@ -141,4 +141,4 @@ def test_change_event_stores_no_secret_value() -> None:
     assert "value" not in fields
     assert "data" not in fields
     assert "payload" not in fields
-    assert fields == {"service", "kind", "resource", "occurred_at", "revision"}
+    assert fields == {"service", "kind", "resource", "occurred_at", "revision", "prev_revision"}

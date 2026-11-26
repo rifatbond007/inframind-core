@@ -1,0 +1,12 @@
+{
+  "scenario_id": "test-podchaos-03-paymentservice-pod-failure",
+  "seed": 2003,
+  "repeat": 0,
+  "onset_ts": "2026-11-21T02:47:52.435264+00:00",
+  "window_s": 240.0,
+  "recorded_at": "2026-11-21T02:52:40.166696+00:00",
+  "baseline_s": 600.0,
+  "recorded_live": true,
+  "changes_recorded": true,
+  "change_events": 1
+}
