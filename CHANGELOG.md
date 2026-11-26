@@ -20,8 +20,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   service they called.
 - Scenarios dev-11 (frontend bad-config rollout, the caller-bug check) and test-09
   (pod-failure on productcatalogservice); first real recordings: dev-01, dev-02.
+- Kubernetes change watcher (D22): rollouts, ConfigMap/Secret changes and HPA rescales
+  are stored in a `change_events` table, readable at `GET /change-events`, and feed the
+  change-correlation term of the RCA ranking live and in replay (`changes.json` per fixture).
+- Metrics `inframind_graph_call_latency_seconds` and `inframind_call_errors_total`
+  (per `caller`, `callee`): call rate, latency and failing calls of each service-graph edge.
+- Grafana dashboard "InfraMind / Incidents" (incidents, root-cause ranking, evidence, LLM
+  summary, change events, alerts, service graph); "InfraMind / Signals" redesigned; the
+  chart's default dashboards are no longer installed.
+- Recordings: dev-03, dev-08, dev-09, dev-10, dev-11; test-01, test-03, test-06, test-07,
+  test-08, test-09 (r0).
 
 ### Fixed
+- `make eval-live` with `--dry-run` recorded instead of printing the plan; the baseline wait
+  counted signals from before a stack restart.
+- `pre-commit run --all-files` rejected the multi-document watcher RBAC manifest.
 - The LLM key named `LLM_API_KEY` in `.env.example` and Helm was never read.
 - The Docker image shipped no LLM prompt template.
 - Acknowledging/resolving an incident failed (`''::jsonb`), and resolved incidents could
