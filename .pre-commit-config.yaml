@@ -18,6 +18,9 @@ repos:
         # `make chart-lint` (helm lint + helm template + the D27 / no-secret guards), which
         # CI runs as a blocking job.
         exclude: ^paper/|^testbed/boutique/base/|^testbed/boutique/patches/(memory-patches|tracing)\.yaml$|^deploy/helm/.*/templates/
+        # Kubernetes manifests are often several `---` documents in one file
+        # (testbed/kind/watcher-rbac.yaml: ServiceAccount + Role + RoleBinding).
+        args: ["--allow-multiple-documents"]
       - id: check-toml
       - id: check-merge-conflict
       - id: detect-private-key
