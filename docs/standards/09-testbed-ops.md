@@ -24,6 +24,12 @@ This is the single command to rule them all. It brings up, in order:
 The order matters: dependencies must be up before dependents. Chaos Mesh is added at step 6
 because it is only useful once an SUT is running.
 
+### Remote host (D31, proposed)
+
+The same bring-up can run in a GitHub Codespace: `make remote-on` forwards every target to it
+and `make down` also stops it. The procedure, secrets and limits are in `testbed/README.md`
+section 7b. Record all repeats of one scenario on one host.
+
 ## 9.2 Verify
 
 ```bash

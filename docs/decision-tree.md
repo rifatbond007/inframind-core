@@ -433,6 +433,36 @@ split is scored once (D6); the test split has not been looked at.
 **Trigger to revisit:** a dev scenario where a caller's own bug produces client errors toward
 a healthy callee (the deepest-depth rule would then blame the callee).
 
+## D31-CodespaceHost. The testbed may run in a GitHub Codespace
+
+**Status: PROPOSED (requested by the user 2026-11-27; supervisor review pending).**
+
+The kind testbed and the compose stack may run in a GitHub Codespace instead of the dev
+laptop. Nothing about InfraMind, the kind cluster (D5), the chart (D27/D28) or the scenarios
+changes: the codespace runs the same `make` targets on more hardware (4 cores / 16 GB by
+default, against the laptop's 8 cores / 7 GiB).
+
+1. `.devcontainer/` (new top-level directory, this decision) defines the codespace:
+   Docker-in-Docker, sshd, the Makefile's pinned kind/kubectl/helm, the venv, the inotify
+   limits `bootstrap.sh` requires, and a D25 git identity.
+2. `make remote-on` (laptop) forwards every other target to the codespace through
+   `gh codespace ssh` (`scripts/remote.mk`, `scripts/codespace.sh`); the codespace runs the
+   **pushed** branch. `make down` in remote mode also stops the codespace.
+   `make codespace-ports` forwards the NodePorts so the usual localhost URLs work;
+   `make codespace-fetch` copies recorded fixtures back for committing.
+3. CI publishes the image to `ghcr.io/rifatbond007/inframind-core` (branch and `sha-` tags)
+   after the gates pass; `make image-pull` uses it and builds locally on a miss.
+
+**Why not D8:** D8 rules out *deploying InfraMind* to a cloud (AWS/GCP/Azure) or a VM. Here
+the testbed is unchanged and kind-only; only the machine that hosts it is remote.
+
+**Risk:** a host change between recordings changes timing and noise. A scenario's repeats
+are recorded on one host, and the host is stated in the threats-to-validity paragraph.
+Codespaces stop after at most 4 h without user activity, and the free quota is limited.
+
+**Trigger to revisit:** supervisor rejects remote hosting, or a codespace recording differs
+systematically from the laptop's on the same scenario.
+
 ## D-Setup. Step 0 only scaffolds the repo
 
 Step 0 (this phase) creates the module skeletons, tooling, CI, and dev compose. No functional
@@ -483,6 +513,7 @@ Format: **ID · date · decision · why · alternatives · status** (`proposed` 
 - **D26-Chaos-runtime-blocked** · 2026-10-21 · While D2-Chaos-runtime is still pending, the 6 Stress/NetworkChaos scenarios (dev-04..07, test-04..05) ship **written and marked blocked** (`status: blocked`, `# block_status: d2_chaos_runtime_docker`). The harness refuses to run them by default (exit code 3); with `--allow-blocked` it writes rows with `blocked=True` and `detected=False`, never a fabricated accuracy. The blocked marker is asserted by a test. · Why: recording the blocker as an artefact (rather than deleting the scenarios or silently scoring them zero) preserves D6's locked "≥12 distinct scenarios" promise while honouring PUKU.md's "never invent a number". · Alternatives: (a) delete the blocked scenarios — rejected, reduces dev to 4 and test to 4 scenarios and breaks the locked coverage. (b) score them as zero — rejected, fabricated number. · Status: approved by team as a P7 deliverable; the underlying D2-Chaos-runtime runtime change is still proposed. Cross-ref: `docs/standards/10-evaluation.md` §10.3; `test_blocked_scenarios_are_all_stress_or_network_chaos`.
 
 - **D22-Impl** · 2026-11-20 · The D22 K8s change watcher is built: in-process in the `rca` process (`rca/change_watcher.py`, list-then-watch over `httpx`, no new dependency), append-only `change_events` table and `GET /change-events` (read-only), seeded back into memory on restart. The compose `rca` container joins the `kind` network with a read-only ServiceAccount kubeconfig (`make watcher-kubeconfig`). Live recordings write `changes.json` per fixture and replay passes it to the ranker; a fixture without one replays with no change events. HPA scaling = `.status.desiredReplicas`; Secrets watched metadata-only (see D22). · Why: replay of dev-11 (a frontend config change) ranked the healthy callee first on all 5 repeats because `w4` was never fed; the watcher was specified but never implemented, so live had the same gap. · Alternatives: (a) synthesise the change event from the scenario YAML in replay only (rejected: uses the scenario spec, not an observation, and the deployed system would still lack `w4`); (b) re-weight `w3`/`w4` (rejected: tuning around a missing input); (c) amend D30 to down-weight a callee with no anomaly of its own (deferred). · Status: approved by the user 2026-11-20 (full option); supervisor follow-up.
+- **D31-CodespaceHost** · 2026-11-27 · The testbed may run in a GitHub Codespace (`.devcontainer/`), driven from the laptop by `make remote-on` (every target forwarded over `gh codespace ssh`; `make down` also stops the codespace); CI publishes the image to `ghcr.io/rifatbond007/inframind-core`. kind, InfraMind, the chart and the scenarios are unchanged. · Why: the 7 GiB laptop is slow with the full testbed. · Alternatives: (a) a cloud VM or managed Kubernetes — rejected, D8/D5; (b) a single-process compose stack — smaller saving, the cluster dominates memory; (c) a 1-node kind cluster — changes the testbed mid-evaluation. · Status: PROPOSED, requested by the user; supervisor review pending.
 
 ### Proposed deviations from the July 2026 proposal (supervisor approval pending)
 

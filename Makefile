@@ -1,6 +1,21 @@
 # InfraMind — developer entry point.
 # Run `make help` to see targets.
 
+# --- remote mode (D31) ---
+# `make remote-on` writes .inframind-remote.mk; from then on every target (except the
+# codespace-* / remote-* ones) runs in the GitHub codespace via scripts/remote.mk. Inside the
+# codespace ($CODESPACES=true) the normal body below runs as usual.
+-include .inframind-remote.mk
+ifeq ($(INFRAMIND_REMOTE),codespace)
+ifneq ($(CODESPACES),true)
+INFRAMIND_FORWARD := 1
+endif
+endif
+
+ifdef INFRAMIND_FORWARD
+include scripts/remote.mk
+else
+
 PY     ?= python3
 PIP    ?= $(PY) -m pip
 RUFF   ?= $(PY) -m ruff
@@ -51,7 +66,7 @@ CHAOS_TESTING_NS     ?= chaos-testing
 .PHONY: help
 help: ## Show available targets
 	@awk 'BEGIN {FS = ":.*##"; printf "Targets:\n"} \
-		/^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-15s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE)
+		/^[a-zA-Z_-]+:.*?##/ { printf "  \033[36m%-17s\033[0m %s\n", $$1, $$2 }' $(MAKEFILE_LIST)
 
 # --- install ---
 .PHONY: install
@@ -355,6 +370,24 @@ APP_TAG ?= 0.0.0
 image: ## build the local InfraMind image (inframind:dev) from the root Dockerfile
 	docker build -t inframind:dev .
 
+# CI publishes the image to GHCR on pushes to dev, main and the dev-* branches (D31). Pull
+# the current branch's tag and retag it as inframind:dev, which is what compose runs; on a
+# miss (no CI run yet, no access) fall back to a local build.
+GHCR_IMAGE ?= ghcr.io/rifatbond007/inframind-core
+GHCR_TAG   ?= $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null | tr '/' '-')
+
+.PHONY: image-pull
+image-pull: ## pull this branch's CI-built image from GHCR as inframind:dev (builds on a miss)
+	@if [ -n "$$GITHUB_TOKEN" ]; then \
+	  echo "$$GITHUB_TOKEN" | docker login ghcr.io -u "$${GITHUB_USER:-$$USER}" --password-stdin >/dev/null 2>&1 || true; \
+	fi
+	@if docker pull -q $(GHCR_IMAGE):$(GHCR_TAG) >/dev/null 2>&1; then \
+	  docker tag $(GHCR_IMAGE):$(GHCR_TAG) inframind:dev && echo "image-pull: $(GHCR_IMAGE):$(GHCR_TAG) -> inframind:dev"; \
+	else \
+	  echo "image-pull: $(GHCR_IMAGE):$(GHCR_TAG) not available; building locally"; \
+	  docker build -t inframind:dev .; \
+	fi
+
 .PHONY: hadolint
 hadolint: ## lint the Dockerfile (blocking at warning severity, matching CI)
 	docker run --rm -i hadolint/hadolint:v2.12.0 --failure-threshold warning < Dockerfile
@@ -396,3 +429,8 @@ up-app: image image-load helm-install ## build the image, load it into kind, and
 app-status: ## show the InfraMind pods and Deployments in the kind cluster
 	kubectl --kubeconfig $(TESTBED_KUBECONFIG) --context $(TESTBED_CONTEXT) \
 	  -n $(APP_NAMESPACE) get deploy,pods,svc -o wide
+
+endif # INFRAMIND_FORWARD
+
+# Codespace management (D31): always available, always runs on this machine.
+include scripts/codespace.mk

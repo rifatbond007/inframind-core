@@ -100,3 +100,6 @@ paper/build/
 
 # Runtime state of host-run workers (RCA graph snapshot: RCA_GRAPH_PATH default).
 data/
+
+# D31: remote-mode switch written by `make remote-on`
+.inframind-remote.mk

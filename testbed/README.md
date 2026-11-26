@@ -193,6 +193,46 @@ For deeper landmines, read [`docs/standards/09-testbed-ops.md`](../standards/09-
 Switching profiles is a value-file change plus a `make down && make up`
 cycle. Do not edit values files mid-run.
 
+## 7b. Running in a GitHub Codespace (D31, proposed)
+
+The laptop can hand the whole testbed to a codespace (4 cores / 16 GB) and keep using the
+same `make` targets. kind, InfraMind and the scenarios are unchanged; only the host differs.
+
+One-time setup on the laptop:
+
+```bash
+gh auth refresh -h github.com -s codespace   # gh needs the codespace scope
+git push origin dev-rifat                    # the codespace runs the PUSHED branch
+make remote-on                               # from now on, make targets run remotely
+```
+
+Then, as usual:
+
+| Laptop command | What happens |
+|---|---|
+| `make up` | creates the codespace on first use (setup takes a few minutes), then runs `make up` there |
+| `make codespace-ports` | forwards 30300/30090/30093/30686/30100/8080 to localhost (keep it running in its own terminal); Grafana stays at http://localhost:30300 |
+| `make eval-live EVAL_SET=… SCENARIO=…` | starts the recording **detached** in the codespace; follow with `make codespace-logs` |
+| `make codespace-fetch` | copies `evaluation/fixtures` and `evaluation/results` back to the laptop, to commit there |
+| `make down` | tears the testbed down in the codespace, **then stops the codespace** |
+| `make remote-off` | back to running everything locally |
+
+Things to know:
+
+- **Pushed code only.** Each run fast-forwards the codespace to `origin/<branch>`; the script
+  warns about uncommitted or unpushed laptop changes.
+- **Secrets.** `.env` stays on the laptop. Add `LLM_API_KEY` as a Codespaces secret for this
+  repository (Settings → Secrets and variables → Codespaces); compose reads it from the
+  environment.
+- **Idle stop.** A codespace stops after 4 h without user activity (GitHub's maximum). Keep
+  `make codespace-logs` or `make codespace-ports` running during a long recording.
+- **Quota.** Compute is billed per core-hour while the codespace runs (a 4-core machine uses 4
+  per hour); a stopped codespace bills storage only. `make codespace-delete` removes it.
+- **One host per scenario.** Record all repeats of a scenario on the same host, and state the
+  host in the threats-to-validity paragraph (D31 risk).
+- The image comes from GHCR (`make image-pull`, run on every codespace start) when CI has
+  published this branch; otherwise it is built in the codespace.
+
 ## 8. Cross-reference
 
 - Standard: [`docs/standards/09-testbed-ops.md`](../standards/09-testbed-ops.md) — the authority

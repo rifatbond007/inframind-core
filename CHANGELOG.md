@@ -30,11 +30,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   chart's default dashboards are no longer installed.
 - Recordings: dev-03, dev-08, dev-09, dev-10, dev-11; test-01, test-03, test-06, test-07,
   test-08, test-09 (r0).
+- Remote testbed host (D31, proposed): `make remote-on` runs every make target in a GitHub
+  Codespace (`.devcontainer/`); `make down` also stops it; `make codespace-ports`,
+  `codespace-logs`, `codespace-fetch`. CI publishes the image to
+  `ghcr.io/rifatbond007/inframind-core`; `make image-pull` uses it.
 
 ### Fixed
 - `make eval-live` with `--dry-run` recorded instead of printing the plan; the baseline wait
   counted signals from before a stack restart.
 - `pre-commit run --all-files` rejected the multi-document watcher RBAC manifest.
+- `make help` printed no targets (it read an undefined `$(MAKEFILE)`).
 - The LLM key named `LLM_API_KEY` in `.env.example` and Helm was never read.
 - The Docker image shipped no LLM prompt template.
 - Acknowledging/resolving an incident failed (`''::jsonb`), and resolved incidents could
