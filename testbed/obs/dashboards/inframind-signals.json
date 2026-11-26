@@ -7,14 +7,29 @@
   ],
   "timezone": "browser",
   "schemaVersion": 38,
-  "version": 1,
+  "version": 3,
   "editable": true,
+  "graphTooltip": 1,
   "refresh": "30s",
   "time": {
     "from": "now-1h",
     "to": "now"
   },
+  "timepicker": {
+    "refresh_intervals": [
+      "10s",
+      "30s",
+      "1m",
+      "5m"
+    ]
+  },
   "links": [
+    {
+      "title": "InfraMind / Incidents",
+      "type": "link",
+      "url": "/d/inframind-incidents",
+      "keepTime": true
+    },
     {
       "title": "Service call graph (Jaeger)",
       "type": "link",
@@ -46,6 +61,52 @@
       "url": "http://localhost:8080/incidents"
     }
   ],
+  "annotations": {
+    "list": [
+      {
+        "builtIn": 1,
+        "datasource": {
+          "type": "grafana",
+          "uid": "-- Grafana --"
+        },
+        "enable": true,
+        "hide": true,
+        "iconColor": "rgba(0, 211, 255, 1)",
+        "name": "Annotations & Alerts",
+        "type": "dashboard"
+      },
+      {
+        "name": "Incidents opened",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${ds_prometheus}"
+        },
+        "enable": true,
+        "iconColor": "orange",
+        "expr": "sum by (service) (increase(inframind_incidents_opened_total[1m])) > 0",
+        "step": "60s",
+        "titleFormat": "Incident opened",
+        "textFormat": "{{service}}",
+        "tagKeys": "service"
+      },
+      {
+        "name": "Change events (D22)",
+        "datasource": {
+          "type": "postgres",
+          "uid": "inframind-postgres"
+        },
+        "enable": true,
+        "iconColor": "purple",
+        "target": {
+          "refId": "Anno",
+          "format": "table",
+          "rawQuery": true,
+          "editorMode": "code",
+          "rawSql": "SELECT occurred_at AS time, service || ': ' || kind || ' ' || resource AS text, service AS tags FROM change_events WHERE $__timeFilter(occurred_at) ORDER BY occurred_at"
+        }
+      }
+    ]
+  },
   "templating": {
     "list": [
       {
@@ -82,6 +143,33 @@
         "hide": 2
       },
       {
+        "name": "service",
+        "label": "Service",
+        "type": "query",
+        "datasource": {
+          "type": "prometheus",
+          "uid": "${ds_prometheus}"
+        },
+        "query": {
+          "query": "label_values(kube_deployment_spec_replicas{namespace=\"default\"}, deployment)",
+          "refId": "service"
+        },
+        "definition": "label_values(kube_deployment_spec_replicas{namespace=\"default\"}, deployment)",
+        "refresh": 2,
+        "sort": 1,
+        "multi": true,
+        "includeAll": true,
+        "allValue": ".+",
+        "current": {
+          "text": [
+            "All"
+          ],
+          "value": [
+            "$__all"
+          ]
+        }
+      },
+      {
         "name": "trace_service",
         "label": "Trace service",
         "type": "custom",
@@ -95,23 +183,10 @@
   },
   "panels": [
     {
-      "type": "row",
-      "title": "Overview",
-      "id": 1,
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 0
-      },
-      "panels": []
-    },
-    {
       "type": "stat",
-      "title": "Firing alerts",
-      "id": 2,
-      "description": "Excludes the always-on Watchdog and InfoInhibitor.",
+      "id": 1,
+      "title": "Incidents opened \u00b7 1h",
+      "description": "Incidents InfraMind opened in the last hour (all services).",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds_prometheus}"
@@ -120,11 +195,16 @@
         "h": 4,
         "w": 4,
         "x": 0,
-        "y": 1
+        "y": 0
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "decimals": 0,
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -145,10 +225,79 @@
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
-          ]
+          ],
+          "fields": "",
+          "values": false
         },
-        "colorMode": "background",
-        "graphMode": "area"
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "sum(increase(inframind_incidents_opened_total[1h])) or vector(0)"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 2,
+      "title": "Firing alerts",
+      "description": "Firing Alertmanager alerts, excluding the always-on Watchdog and InfoInhibitor.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds_prometheus}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 4,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto"
       },
       "targets": [
         {
@@ -163,59 +312,9 @@
     },
     {
       "type": "stat",
-      "title": "Boutique pods running",
       "id": 3,
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${ds_prometheus}"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 4,
-        "y": 1
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "background",
-        "graphMode": "area"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${ds_prometheus}"
-          },
-          "expr": "sum(kube_pod_status_phase{namespace=\"default\", phase=\"Running\"})"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Restarts (1h)",
-      "id": 4,
-      "description": "",
+      "title": "Pods not ready",
+      "description": "Boutique pods (namespace default) whose Ready condition is false.",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds_prometheus}"
@@ -224,11 +323,16 @@
         "h": 4,
         "w": 4,
         "x": 8,
-        "y": 1
+        "y": 0
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "decimals": 0,
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -249,10 +353,79 @@
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
-          ]
+          ],
+          "fields": "",
+          "values": false
         },
-        "colorMode": "background",
-        "graphMode": "area"
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto"
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "sum(kube_pod_status_ready{namespace=\"default\", condition=\"false\"}) or vector(0)"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "id": 4,
+      "title": "Container restarts \u00b7 1h",
+      "description": "Container restarts across Boutique in the last hour.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds_prometheus}"
+      },
+      "gridPos": {
+        "h": 4,
+        "w": 4,
+        "x": 12,
+        "y": 0
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "decimals": 0,
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              },
+              {
+                "color": "red",
+                "value": 1
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto"
       },
       "targets": [
         {
@@ -267,9 +440,9 @@
     },
     {
       "type": "stat",
-      "title": "Error/warn log lines (5m)",
       "id": 5,
-      "description": "",
+      "title": "Error/warn log lines \u00b7 5m",
+      "description": "Lines matching the Loki collector's error/warn filter in the last 5 minutes. Some background noise is normal; watch the trend.",
       "datasource": {
         "type": "loki",
         "uid": "${ds_loki}"
@@ -277,17 +450,22 @@
       "gridPos": {
         "h": 4,
         "w": 4,
-        "x": 12,
-        "y": 1
+        "x": 16,
+        "y": 0
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "decimals": 0,
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
               {
-                "color": "green",
+                "color": "text",
                 "value": null
               }
             ]
@@ -299,10 +477,15 @@
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
-          ]
+          ],
+          "fields": "",
+          "values": false
         },
-        "colorMode": "background",
-        "graphMode": "area"
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto"
       },
       "targets": [
         {
@@ -311,70 +494,15 @@
             "type": "loki",
             "uid": "${ds_loki}"
           },
-          "expr": "sum(count_over_time({namespace=\"default\", app!=\"\"} |~ \"(?i)(error|warn|fatal|panic|exception|critical|severe|traceback)\" [5m])) or vector(0)",
-          "queryType": "range"
+          "expr": "sum(count_over_time({namespace=\"default\", app!=\"\"} |~ \"(?i)(error|warn|fatal|panic|exception|critical|severe|traceback)\" [5m])) or vector(0)"
         }
       ]
     },
     {
       "type": "stat",
-      "title": "InfraMind processes up",
       "id": 6,
-      "description": "api, detection, rca and the three collectors (6 when all are running).",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${ds_prometheus}"
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 4,
-        "x": 16,
-        "y": 1
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "red",
-                "value": null
-              },
-              {
-                "color": "green",
-                "value": 6
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "reduceOptions": {
-          "calcs": [
-            "lastNotNull"
-          ]
-        },
-        "colorMode": "background",
-        "graphMode": "area"
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${ds_prometheus}"
-          },
-          "expr": "sum(up{job=\"inframind-compose\"})"
-        }
-      ]
-    },
-    {
-      "type": "stat",
-      "title": "Incidents opened (1h)",
-      "id": 7,
-      "description": "",
+      "title": "InfraMind components down",
+      "description": "InfraMind compose processes whose /metrics scrape is failing (up == 0).",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds_prometheus}"
@@ -383,11 +511,16 @@
         "h": 4,
         "w": 4,
         "x": 20,
-        "y": 1
+        "y": 0
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "decimals": 0,
+          "noValue": "0",
+          "color": {
+            "mode": "thresholds"
+          },
           "thresholds": {
             "mode": "absolute",
             "steps": [
@@ -396,7 +529,7 @@
                 "value": null
               },
               {
-                "color": "orange",
+                "color": "red",
                 "value": 1
               }
             ]
@@ -408,10 +541,15 @@
         "reduceOptions": {
           "calcs": [
             "lastNotNull"
-          ]
+          ],
+          "fields": "",
+          "values": false
         },
-        "colorMode": "background",
-        "graphMode": "area"
+        "colorMode": "value",
+        "graphMode": "area",
+        "justifyMode": "center",
+        "textMode": "value",
+        "orientation": "auto"
       },
       "targets": [
         {
@@ -420,47 +558,190 @@
             "type": "prometheus",
             "uid": "${ds_prometheus}"
           },
-          "expr": "sum(increase(inframind_incidents_opened_total[1h])) or vector(0)"
+          "expr": "count(up{job=\"inframind-compose\"} == 0) or vector(0)"
         }
       ]
     },
     {
       "type": "row",
-      "title": "Metrics signal (what the Prometheus collector ingests)",
-      "id": 8,
+      "id": 7,
+      "title": "Service health \u00b7 $service",
       "collapsed": false,
       "gridPos": {
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 5
+        "y": 4
       },
       "panels": []
     },
     {
       "type": "timeseries",
-      "title": "CPU by service",
+      "id": 8,
+      "title": "Error/warn log lines per minute",
+      "description": "Same LogQL as the Loki collector, per app.",
+      "datasource": {
+        "type": "loki",
+        "uid": "${ds_loki}"
+      },
+      "gridPos": {
+        "x": 0,
+        "y": 5,
+        "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "line",
+            "lineWidth": 1,
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "sortBy": "Max",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "loki",
+            "uid": "${ds_loki}"
+          },
+          "expr": "sum by (app) (count_over_time({namespace=\"default\", app=~\"$service\"} |~ \"(?i)(error|warn|fatal|panic|exception|critical|severe|traceback)\" [1m]))",
+          "legendFormat": "{{app}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
       "id": 9,
-      "description": "",
+      "title": "Container restarts (per 5m)",
+      "description": "Restarts in each 5-minute window. A pod kill shows as a replacement pod, not a restart.",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds_prometheus}"
       },
       "gridPos": {
-        "h": 8,
+        "x": 12,
+        "y": 5,
         "w": 12,
+        "h": 8
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "drawStyle": "bars",
+            "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "opacity",
+            "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
+            "stacking": {
+              "mode": "none",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "showLegend": true,
+          "displayMode": "table",
+          "placement": "right",
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "sortBy": "Max",
+          "sortDesc": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "expr": "sum by (service) (label_replace(increase(kube_pod_container_status_restarts_total{namespace=\"default\", pod=~\"$service-.+\"}[5m]), \"service\", \"$1\", \"pod\", \"(.+)-[a-z0-9]{6,10}-[a-z0-9]{5}\"))",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "id": 10,
+      "title": "CPU usage",
+      "description": "Cores used per service.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${ds_prometheus}"
+      },
+      "gridPos": {
         "x": 0,
-        "y": 6
+        "y": 13,
+        "w": 12,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
           "unit": "cores",
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
-            "fillOpacity": 10,
+            "drawStyle": "line",
             "lineWidth": 1,
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
             "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
             "stacking": {
-              "mode": "none"
+              "mode": "none",
+              "group": "A"
             }
           }
         },
@@ -468,12 +749,15 @@
       },
       "options": {
         "legend": {
+          "showLegend": true,
           "displayMode": "table",
           "placement": "right",
           "calcs": [
             "lastNotNull",
             "max"
-          ]
+          ],
+          "sortBy": "Max",
+          "sortDesc": true
         },
         "tooltip": {
           "mode": "multi",
@@ -482,40 +766,49 @@
       },
       "targets": [
         {
-          "expr": "sum by (service) (label_replace(rate(container_cpu_usage_seconds_total{namespace=\"default\", container!=\"\", container!=\"POD\"}[1m]), \"service\", \"$1\", \"pod\", \"(.+)-[a-z0-9]{6,10}-[a-z0-9]{5}\"))",
-          "legendFormat": "{{service}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${ds_prometheus}"
-          }
+          },
+          "expr": "sum by (service) (label_replace(rate(container_cpu_usage_seconds_total{namespace=\"default\", container!=\"\", container!=\"POD\", pod=~\"$service-.+\"}[1m]), \"service\", \"$1\", \"pod\", \"(.+)-[a-z0-9]{6,10}-[a-z0-9]{5}\"))",
+          "legendFormat": "{{service}}"
         }
       ]
     },
     {
       "type": "timeseries",
-      "title": "Memory working set by service",
-      "id": 10,
-      "description": "",
+      "id": 11,
+      "title": "Memory working set",
+      "description": "Working-set bytes per service.",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds_prometheus}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
         "x": 12,
-        "y": 6
+        "y": 13,
+        "w": 12,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
           "unit": "bytes",
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
-            "fillOpacity": 10,
+            "drawStyle": "line",
             "lineWidth": 1,
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
             "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
             "stacking": {
-              "mode": "none"
+              "mode": "none",
+              "group": "A"
             }
           }
         },
@@ -523,12 +816,15 @@
       },
       "options": {
         "legend": {
+          "showLegend": true,
           "displayMode": "table",
           "placement": "right",
           "calcs": [
             "lastNotNull",
             "max"
-          ]
+          ],
+          "sortBy": "Max",
+          "sortDesc": true
         },
         "tooltip": {
           "mode": "multi",
@@ -537,163 +833,62 @@
       },
       "targets": [
         {
-          "expr": "sum by (service) (label_replace(container_memory_working_set_bytes{namespace=\"default\", container!=\"\", container!=\"POD\"}, \"service\", \"$1\", \"pod\", \"(.+)-[a-z0-9]{6,10}-[a-z0-9]{5}\"))",
-          "legendFormat": "{{service}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${ds_prometheus}"
-          }
+          },
+          "expr": "sum by (service) (label_replace(container_memory_working_set_bytes{namespace=\"default\", container!=\"\", container!=\"POD\", pod=~\"$service-.+\"}, \"service\", \"$1\", \"pod\", \"(.+)-[a-z0-9]{6,10}-[a-z0-9]{5}\"))",
+          "legendFormat": "{{service}}"
         }
       ]
     },
     {
-      "type": "timeseries",
-      "title": "Container restarts by service",
-      "id": 11,
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${ds_prometheus}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 14
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 10,
-            "lineWidth": 1,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "expr": "sum by (service) (label_replace(kube_pod_container_status_restarts_total{namespace=\"default\"}, \"service\", \"$1\", \"pod\", \"(.+)-[a-z0-9]{6,10}-[a-z0-9]{5}\"))",
-          "legendFormat": "{{service}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${ds_prometheus}"
-          }
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Network receive by service",
+      "type": "row",
       "id": 12,
-      "description": "Not ingested by InfraMind; shown as a traffic reference.",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${ds_prometheus}"
-      },
+      "title": "InfraMind pipeline",
+      "collapsed": false,
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 14
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
       },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "Bps",
-          "custom": {
-            "fillOpacity": 10,
-            "lineWidth": 1,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "expr": "sum by (service) (label_replace(rate(container_network_receive_bytes_total{namespace=\"default\"}[1m]), \"service\", \"$1\", \"pod\", \"(.+)-[a-z0-9]{6,10}-[a-z0-9]{5}\"))",
-          "legendFormat": "{{service}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${ds_prometheus}"
-          }
-        }
-      ]
+      "panels": []
     },
     {
-      "type": "row",
-      "title": "Logs signal (what the Loki collector ingests)",
+      "type": "timeseries",
       "id": 13,
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 22
-      },
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "Error/warn log lines by app",
-      "id": 14,
-      "description": "Same selector and filter as the collector's DEFAULT_QUERY.",
+      "title": "Signals ingested",
+      "description": "Signals published to stream:signals, by source.",
       "datasource": {
-        "type": "loki",
-        "uid": "${ds_loki}"
+        "type": "prometheus",
+        "uid": "${ds_prometheus}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
         "x": 0,
-        "y": 23
+        "y": 22,
+        "w": 6,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
+          "unit": "cps",
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
-            "fillOpacity": 10,
+            "drawStyle": "line",
             "lineWidth": 1,
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
             "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
             "stacking": {
-              "mode": "normal"
+              "mode": "normal",
+              "group": "A"
             }
           }
         },
@@ -701,213 +896,20 @@
       },
       "options": {
         "legend": {
+          "showLegend": true,
           "displayMode": "table",
           "placement": "right",
           "calcs": [
             "lastNotNull",
             "max"
-          ]
+          ],
+          "sortBy": "Max",
+          "sortDesc": true
         },
         "tooltip": {
           "mode": "multi",
           "sort": "desc"
         }
-      },
-      "targets": [
-        {
-          "expr": "sum by (app) (count_over_time({namespace=\"default\", app!=\"\"} |~ \"(?i)(error|warn|fatal|panic|exception|critical|severe|traceback)\" [1m]))",
-          "legendFormat": "{{app}}",
-          "queryType": "range",
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "${ds_loki}"
-          }
-        }
-      ]
-    },
-    {
-      "type": "logs",
-      "title": "Error/warn log lines",
-      "id": 15,
-      "datasource": {
-        "type": "loki",
-        "uid": "${ds_loki}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 23
-      },
-      "options": {
-        "showTime": true,
-        "wrapLogMessage": true,
-        "sortOrder": "Descending",
-        "enableLogDetails": true
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "loki",
-            "uid": "${ds_loki}"
-          },
-          "expr": "{namespace=\"default\", app!=\"\"} |~ \"(?i)(error|warn|fatal|panic|exception|critical|severe|traceback)\"",
-          "queryType": "range"
-        }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "Traces signal (what the Jaeger collector ingests)",
-      "id": 16,
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 31
-      },
-      "panels": []
-    },
-    {
-      "type": "table",
-      "title": "Error traces: $trace_service",
-      "id": 17,
-      "datasource": {
-        "type": "jaeger",
-        "uid": "${ds_jaeger}"
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 12,
-        "x": 0,
-        "y": 32
-      },
-      "description": "Traces with an error span; the Jaeger collector turns these into error signals.",
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "jaeger",
-            "uid": "${ds_jaeger}"
-          },
-          "queryType": "search",
-          "service": "$trace_service",
-          "tags": "error=true",
-          "limit": 20
-        }
-      ]
-    },
-    {
-      "type": "table",
-      "title": "Recent traces: $trace_service",
-      "id": 18,
-      "datasource": {
-        "type": "jaeger",
-        "uid": "${ds_jaeger}"
-      },
-      "gridPos": {
-        "h": 10,
-        "w": 12,
-        "x": 12,
-        "y": 32
-      },
-      "targets": [
-        {
-          "refId": "A",
-          "datasource": {
-            "type": "jaeger",
-            "uid": "${ds_jaeger}"
-          },
-          "queryType": "search",
-          "service": "$trace_service",
-          "limit": 20
-        }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "Alerts signal (what Alertmanager sends to the InfraMind webhook)",
-      "id": 19,
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 42
-      },
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "Firing alerts by name",
-      "id": 20,
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${ds_prometheus}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 43
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 10,
-            "lineWidth": 1,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "expr": "count by (alertname) (ALERTS{alertstate=\"firing\"})",
-          "legendFormat": "{{alertname}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${ds_prometheus}"
-          }
-        }
-      ]
-    },
-    {
-      "type": "table",
-      "title": "Firing alerts now",
-      "id": 21,
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${ds_prometheus}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 43
       },
       "targets": [
         {
@@ -916,122 +918,44 @@
             "type": "prometheus",
             "uid": "${ds_prometheus}"
           },
-          "expr": "ALERTS{alertstate=\"firing\"}",
-          "instant": true,
-          "format": "table"
-        }
-      ],
-      "transformations": [
-        {
-          "id": "organize",
-          "options": {
-            "excludeByName": {
-              "Time": true,
-              "Value": true,
-              "__name__": true,
-              "alertstate": true
-            },
-            "indexByName": {
-              "alertname": 0,
-              "severity": 1,
-              "namespace": 2
-            }
-          }
-        }
-      ]
-    },
-    {
-      "type": "row",
-      "title": "InfraMind pipeline (compose processes)",
-      "id": 22,
-      "collapsed": false,
-      "gridPos": {
-        "h": 1,
-        "w": 24,
-        "x": 0,
-        "y": 51
-      },
-      "panels": []
-    },
-    {
-      "type": "timeseries",
-      "title": "Signals published to the bus by source",
-      "id": 23,
-      "description": "",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${ds_prometheus}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 52
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "ops",
-          "custom": {
-            "fillOpacity": 10,
-            "lineWidth": 1,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "normal"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
           "expr": "sum by (source) (rate(inframind_signals_received_total[2m]))",
-          "legendFormat": "{{source}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${ds_prometheus}"
-          }
+          "legendFormat": "{{source}}"
         }
       ]
     },
     {
       "type": "timeseries",
+      "id": 14,
       "title": "Anomalies by detector",
-      "id": 24,
-      "description": "",
+      "description": "Anomalies emitted per 2-minute window.",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds_prometheus}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 52
+        "x": 6,
+        "y": 22,
+        "w": 6,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
-            "fillOpacity": 10,
+            "drawStyle": "bars",
             "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "opacity",
             "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
             "stacking": {
-              "mode": "none"
+              "mode": "normal",
+              "group": "A"
             }
           }
         },
@@ -1039,12 +963,15 @@
       },
       "options": {
         "legend": {
+          "showLegend": true,
           "displayMode": "table",
           "placement": "right",
           "calcs": [
             "lastNotNull",
             "max"
-          ]
+          ],
+          "sortBy": "Max",
+          "sortDesc": true
         },
         "tooltip": {
           "mode": "multi",
@@ -1053,95 +980,49 @@
       },
       "targets": [
         {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
           "expr": "sum by (detector) (increase(inframind_anomalies_emitted_total[2m]))",
-          "legendFormat": "{{detector}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${ds_prometheus}"
-          }
+          "legendFormat": "{{detector}}"
         }
       ]
     },
     {
       "type": "timeseries",
+      "id": 15,
       "title": "Incidents opened by service",
-      "id": 25,
-      "description": "",
+      "description": "Incidents opened per 5-minute window.",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds_prometheus}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 60
-      },
-      "fieldConfig": {
-        "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 10,
-            "lineWidth": 1,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none"
-            }
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
-        },
-        "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
-        }
-      },
-      "targets": [
-        {
-          "expr": "sum by (service) (increase(inframind_incidents_opened_total[5m]))",
-          "legendFormat": "{{service}}",
-          "refId": "A",
-          "datasource": {
-            "type": "prometheus",
-            "uid": "${ds_prometheus}"
-          }
-        }
-      ]
-    },
-    {
-      "type": "timeseries",
-      "title": "Alerts sent by channel",
-      "id": 26,
-      "description": "Stays empty until the live RCA -> alerting hand-off is wired (docs/PROGRESS.md).",
-      "datasource": {
-        "type": "prometheus",
-        "uid": "${ds_prometheus}"
-      },
-      "gridPos": {
-        "h": 8,
-        "w": 12,
         "x": 12,
-        "y": 60
+        "y": 22,
+        "w": 6,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
           "unit": "short",
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
-            "fillOpacity": 10,
+            "drawStyle": "bars",
             "lineWidth": 1,
+            "fillOpacity": 80,
+            "gradientMode": "opacity",
             "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
             "stacking": {
-              "mode": "none"
+              "mode": "normal",
+              "group": "A"
             }
           }
         },
@@ -1149,12 +1030,15 @@
       },
       "options": {
         "legend": {
+          "showLegend": true,
           "displayMode": "table",
           "placement": "right",
           "calcs": [
             "lastNotNull",
             "max"
-          ]
+          ],
+          "sortBy": "Max",
+          "sortDesc": true
         },
         "tooltip": {
           "mode": "multi",
@@ -1163,40 +1047,49 @@
       },
       "targets": [
         {
-          "expr": "sum by (channel, severity) (increase(inframind_alerts_sent_total[5m]))",
-          "legendFormat": "{{channel}} / {{severity}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${ds_prometheus}"
-          }
+          },
+          "expr": "sum by (service) (increase(inframind_incidents_opened_total[5m]))",
+          "legendFormat": "{{service}}"
         }
       ]
     },
     {
       "type": "timeseries",
-      "title": "RCA ranking and LLM call time (p95)",
-      "id": 27,
-      "description": "Empty while no live incident reaches RCA ranking / the LLM.",
+      "id": 16,
+      "title": "RCA and LLM latency \u00b7 p95",
+      "description": "95th percentile of RCA ranking time and LLM summary call time.",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds_prometheus}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 0,
-        "y": 68
+        "x": 18,
+        "y": 22,
+        "w": 6,
+        "h": 8
       },
       "fieldConfig": {
         "defaults": {
           "unit": "s",
+          "color": {
+            "mode": "palette-classic"
+          },
           "custom": {
-            "fillOpacity": 10,
+            "drawStyle": "line",
             "lineWidth": 1,
+            "fillOpacity": 12,
+            "gradientMode": "opacity",
             "showPoints": "never",
+            "spanNulls": true,
+            "lineInterpolation": "smooth",
+            "axisSoftMin": 0,
             "stacking": {
-              "mode": "none"
+              "mode": "none",
+              "group": "A"
             }
           }
         },
@@ -1204,12 +1097,15 @@
       },
       "options": {
         "legend": {
+          "showLegend": true,
           "displayMode": "table",
           "placement": "right",
           "calcs": [
             "lastNotNull",
             "max"
-          ]
+          ],
+          "sortBy": "Max",
+          "sortDesc": true
         },
         "tooltip": {
           "mode": "multi",
@@ -1218,77 +1114,519 @@
       },
       "targets": [
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(inframind_rca_ranking_duration_seconds_bucket[5m])))",
-          "legendFormat": "RCA ranking p95",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${ds_prometheus}"
-          }
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(inframind_rca_ranking_duration_seconds_bucket[5m])))",
+          "legendFormat": "RCA ranking"
         },
         {
-          "expr": "histogram_quantile(0.95, sum by (le) (rate(inframind_llm_call_duration_seconds_bucket[5m])))",
-          "legendFormat": "LLM call p95",
           "refId": "B",
           "datasource": {
             "type": "prometheus",
             "uid": "${ds_prometheus}"
-          }
+          },
+          "expr": "histogram_quantile(0.95, sum by (le) (rate(inframind_llm_call_duration_seconds_bucket[5m])))",
+          "legendFormat": "LLM call"
         }
       ]
     },
     {
-      "type": "timeseries",
-      "title": "Process up",
-      "id": 28,
-      "description": "",
+      "type": "state-timeline",
+      "id": 17,
+      "title": "InfraMind components",
+      "description": "Scrape health of each compose process (up metric).",
       "datasource": {
         "type": "prometheus",
         "uid": "${ds_prometheus}"
       },
       "gridPos": {
-        "h": 8,
-        "w": 12,
-        "x": 12,
-        "y": 68
+        "x": 0,
+        "y": 30,
+        "w": 24,
+        "h": 5
       },
       "fieldConfig": {
         "defaults": {
-          "unit": "short",
-          "custom": {
-            "fillOpacity": 10,
-            "lineWidth": 1,
-            "showPoints": "never",
-            "stacking": {
-              "mode": "none"
+          "color": {
+            "mode": "thresholds"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              },
+              {
+                "color": "green",
+                "value": 1
+              }
+            ]
+          },
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "0": {
+                  "text": "DOWN",
+                  "color": "red"
+                },
+                "1": {
+                  "text": "UP",
+                  "color": "green"
+                }
+              }
             }
+          ],
+          "custom": {
+            "fillOpacity": 75,
+            "lineWidth": 0
           }
         },
         "overrides": []
       },
       "options": {
+        "showValue": "never",
+        "mergeValues": true,
+        "alignValue": "left",
+        "rowHeight": 0.8,
         "legend": {
-          "displayMode": "table",
-          "placement": "right",
-          "calcs": [
-            "lastNotNull",
-            "max"
-          ]
+          "showLegend": false
         },
         "tooltip": {
-          "mode": "multi",
-          "sort": "desc"
+          "mode": "single"
         }
       },
       "targets": [
         {
-          "expr": "up{job=\"inframind-compose\"}",
-          "legendFormat": "{{component}}",
           "refId": "A",
           "datasource": {
             "type": "prometheus",
             "uid": "${ds_prometheus}"
-          }
+          },
+          "expr": "up{job=\"inframind-compose\"}",
+          "legendFormat": "{{component}}"
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 19,
+      "title": "Logs \u00b7 raw error/warn lines",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 35
+      },
+      "panels": [
+        {
+          "type": "logs",
+          "id": 18,
+          "title": "Error/warn log lines",
+          "description": "Raw lines the Loki collector turns into log signals.",
+          "datasource": {
+            "type": "loki",
+            "uid": "${ds_loki}"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 36,
+            "w": 24,
+            "h": 12
+          },
+          "options": {
+            "showTime": true,
+            "wrapLogMessage": true,
+            "sortOrder": "Descending",
+            "enableLogDetails": true,
+            "dedupStrategy": "none",
+            "prettifyLogMessage": false
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "loki",
+                "uid": "${ds_loki}"
+              },
+              "expr": "{namespace=\"default\", app=~\"$service\"} |~ \"(?i)(error|warn|fatal|panic|exception|critical|severe|traceback)\""
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 22,
+      "title": "Traces \u00b7 $trace_service",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 36
+      },
+      "panels": [
+        {
+          "type": "table",
+          "id": 20,
+          "title": "Error traces",
+          "description": "Traces with an error span; the Jaeger collector turns these into error signals.",
+          "datasource": {
+            "type": "jaeger",
+            "uid": "${ds_jaeger}"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 37,
+            "w": 12,
+            "h": 10
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "jaeger",
+                "uid": "${ds_jaeger}"
+              },
+              "queryType": "search",
+              "service": "$trace_service",
+              "limit": 20,
+              "tags": "error=true"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "id": 21,
+          "title": "Recent traces",
+          "description": "Latest traces for the selected service.",
+          "datasource": {
+            "type": "jaeger",
+            "uid": "${ds_jaeger}"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 37,
+            "w": 12,
+            "h": 10
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "jaeger",
+                "uid": "${ds_jaeger}"
+              },
+              "queryType": "search",
+              "service": "$trace_service",
+              "limit": 20
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 26,
+      "title": "Alerts \u00b7 Alertmanager and InfraMind",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 37
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "id": 23,
+          "title": "Firing alerts by name",
+          "description": "Alertmanager alerts that the webhook forwards to InfraMind.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 38,
+            "w": 12,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 12,
+                "gradientMode": "opacity",
+                "showPoints": "never",
+                "spanNulls": true,
+                "lineInterpolation": "smooth",
+                "axisSoftMin": 0,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "sortBy": "Max",
+              "sortDesc": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${ds_prometheus}"
+              },
+              "expr": "count by (alertname) (ALERTS{alertstate=\"firing\"})",
+              "legendFormat": "{{alertname}}"
+            }
+          ]
+        },
+        {
+          "type": "table",
+          "id": 24,
+          "title": "Firing alerts now",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "gridPos": {
+            "x": 12,
+            "y": 38,
+            "w": 12,
+            "h": 8
+          },
+          "options": {
+            "showHeader": true,
+            "cellHeight": "sm"
+          },
+          "fieldConfig": {
+            "defaults": {},
+            "overrides": []
+          },
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "Value": true,
+                  "__name__": true,
+                  "alertstate": true,
+                  "container": true,
+                  "endpoint": true,
+                  "instance": true,
+                  "job": true,
+                  "prometheus": true,
+                  "uid": true
+                }
+              }
+            }
+          ],
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${ds_prometheus}"
+              },
+              "expr": "ALERTS{alertstate=\"firing\"}",
+              "format": "table",
+              "instant": true
+            }
+          ]
+        },
+        {
+          "type": "timeseries",
+          "id": 25,
+          "title": "Alerts sent by InfraMind",
+          "description": "Alerts dispatched by the InfraMind router, by channel and severity.",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 46,
+            "w": 24,
+            "h": 7
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "short",
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "bars",
+                "lineWidth": 1,
+                "fillOpacity": 80,
+                "gradientMode": "opacity",
+                "showPoints": "never",
+                "spanNulls": true,
+                "lineInterpolation": "smooth",
+                "axisSoftMin": 0,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "sortBy": "Max",
+              "sortDesc": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${ds_prometheus}"
+              },
+              "expr": "sum by (channel, severity) (increase(inframind_alerts_sent_total[5m]))",
+              "legendFormat": "{{channel}} / {{severity}}"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "row",
+      "id": 28,
+      "title": "Infrastructure detail",
+      "collapsed": true,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 38
+      },
+      "panels": [
+        {
+          "type": "timeseries",
+          "id": 27,
+          "title": "Network receive",
+          "description": "Bytes received per second per service (reference only; not a detector input).",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${ds_prometheus}"
+          },
+          "gridPos": {
+            "x": 0,
+            "y": 39,
+            "w": 24,
+            "h": 8
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "Bps",
+              "color": {
+                "mode": "palette-classic"
+              },
+              "custom": {
+                "drawStyle": "line",
+                "lineWidth": 1,
+                "fillOpacity": 12,
+                "gradientMode": "opacity",
+                "showPoints": "never",
+                "spanNulls": true,
+                "lineInterpolation": "smooth",
+                "axisSoftMin": 0,
+                "stacking": {
+                  "mode": "none",
+                  "group": "A"
+                }
+              }
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "showLegend": true,
+              "displayMode": "table",
+              "placement": "right",
+              "calcs": [
+                "lastNotNull",
+                "max"
+              ],
+              "sortBy": "Max",
+              "sortDesc": true
+            },
+            "tooltip": {
+              "mode": "multi",
+              "sort": "desc"
+            }
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "datasource": {
+                "type": "prometheus",
+                "uid": "${ds_prometheus}"
+              },
+              "expr": "sum by (service) (label_replace(rate(container_network_receive_bytes_total{namespace=\"default\", pod=~\"$service-.+\"}[1m]), \"service\", \"$1\", \"pod\", \"(.+)-[a-z0-9]{6,10}-[a-z0-9]{5}\"))",
+              "legendFormat": "{{service}}"
+            }
+          ]
         }
       ]
     }
