@@ -94,7 +94,7 @@ def create_app(
         Two blocks, concatenated. The first is hand-rolled and dependency-free: the
         process-level signals the testbed has always scraped (`inframind_up`,
         `inframind_uptime_seconds`). The second is `inframind.metrics.render_extra()` —
-        the six pipeline metrics from standard 11 §11.12. Splitting them keeps the P6
+        the eight pipeline metrics from standard 11 §11.12. Splitting them keeps the P6
         contract byte-identical while letting the pipeline metrics grow.
 
         Worker processes serve the *same* registry from their own `/metrics` on port 9100

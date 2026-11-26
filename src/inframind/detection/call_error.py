@@ -22,6 +22,7 @@ from datetime import datetime
 
 from inframind.common.anomaly import Anomaly
 from inframind.common.signal import Signal, Source, normalise_service
+from inframind.metrics import record_call_error
 
 from .config import ErrorSpikeParams
 from .error_spike import ErrorSpikeDetector, is_error_event
@@ -59,6 +60,9 @@ class CallErrorDetector:
         callee = grpc_callee(signal.attrs.get("operation"))
         if callee is None or callee == signal.service or callee not in self._known:
             return None
+        # Every failing call RCA could walk is counted, not only the ones that spike: the
+        # Grafana service graph draws these edges red (D30).
+        record_call_error(signal.service, callee)
         found = self._spike.update(signal.model_copy(update={"service": callee}))
         if found is None:
             return None

@@ -105,6 +105,23 @@ async def test_apply_graph_update_folds_into_the_owned_graph(params) -> None:
     assert graph.is_walkable("frontend", "cartservice")
 
 
+async def test_apply_graph_update_counts_the_edge_call_for_grafana(params) -> None:
+    """Each folded update is one observation on the edge's latency histogram (seconds)."""
+    from inframind import metrics
+
+    worker = RCAWorker(MagicMock(), ServiceGraph(params=params), params=params)
+    child = metrics.GRAPH_CALL_LATENCY.labels(caller="frontend", callee="adservice")
+    before = sum(b.get() for b in child._buckets)
+    before_sum = child._sum.get()
+
+    await worker.apply_graph_update(
+        GraphUpdate(caller="frontend", callee="adservice", latency_ms=40.0, observed_at=T0)
+    )
+
+    assert sum(b.get() for b in child._buckets) == before + 1
+    assert child._sum.get() == before_sum + 0.04
+
+
 def test_symptom_services_prefers_services_with_anomalies() -> None:
     """`_symptom_services` starts the walk from the services that actually carry anomalies."""
     anomalies = _fault_anomalies()

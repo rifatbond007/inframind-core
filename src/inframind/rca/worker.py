@@ -41,6 +41,7 @@ from inframind.common.exceptions import BusError
 from inframind.common.graph_update import GraphUpdate
 from inframind.common.incident import Incident
 from inframind.common.logging import configure_logging, get_logger
+from inframind.metrics import observe_graph_call
 from inframind.metrics import start_http_server as metrics_start_http_server
 
 from .change_correlation import ChangeEvent
@@ -134,8 +135,9 @@ class RCAWorker:
         return await self._graph_consumer.poll_once(self.apply_graph_update)
 
     async def apply_graph_update(self, update: GraphUpdate) -> None:
-        """Fold one graph update into the graph (standard 13.4)."""
+        """Fold one graph update into the graph (standard 13.4) and count it as an edge call."""
         self._graph.apply_update(update)
+        observe_graph_call(update.caller, update.callee, update.latency_ms / 1000.0)
 
     # --- incident stream ---
 

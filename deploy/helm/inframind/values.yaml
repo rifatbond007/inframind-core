@@ -119,7 +119,7 @@ ingress:
   tls: []
 
 # --- observability ---
-# The six metrics (standard 11 section 11.12) come from `inframind.metrics`, which every
+# The eight metrics (standard 11 section 11.12) come from `inframind.metrics`, which every
 # process registers at import time.
 metrics:
   enabled: true

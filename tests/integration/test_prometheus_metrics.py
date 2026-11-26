@@ -1,4 +1,4 @@
-"""The six metrics against real infrastructure. Skipped when the backend is unreachable.
+"""The eight metrics against real infrastructure. Skipped when the backend is unreachable.
 
 Two assertions:
 
