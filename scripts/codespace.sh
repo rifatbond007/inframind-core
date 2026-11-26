@@ -118,7 +118,9 @@ cmd_run() {
   if [ "$detached" = 1 ]; then
     # A recording takes hours: run it detached so a dropped laptop connection cannot kill it.
     local log="testbed/.observe/remote-eval-live-\$(date -u +%Y%m%dT%H%M%SZ).log"
-    remote "$cs" "$sync && $venv && mkdir -p testbed/.observe && L=$log && setsid nohup make $args > \"\$L\" 2>&1 < /dev/null & echo \"[codespace] recording started; log: \$L\""
+    # Only the make call is backgrounded: an `&` at the end of the && chain would run the
+    # whole chain, including the L= assignment, in a subshell, leaving L empty here.
+    remote "$cs" "{ $sync && $venv && mkdir -p testbed/.observe; } || exit 1; L=$log; setsid nohup make $args > \"\$L\" 2>&1 < /dev/null & echo \"[codespace] recording started; log: $WORKDIR/\$L\""
     log_ok "follow it with: make codespace-logs"
   else
     remote "$cs" "$sync && $venv && make $args"
