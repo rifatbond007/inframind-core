@@ -74,6 +74,30 @@ warn_unsynced() {
   fi
 }
 
+# Block until .devcontainer/post-create.sh has finished (it writes ~/.inframind-ready). A fresh
+# codespace accepts ssh before its setup is done, and a failed devcontainer build leaves
+# GitHub's recovery container, which has none of the tools.
+wait_ready() {
+  local cs="$1" rc=0
+  remote "$cs" '[ -f ~/.inframind-ready ]' 2>/dev/null && return 0
+  log_info >&2 "waiting for the codespace setup (.devcontainer/post-create.sh) to finish..."
+  remote "$cs" 'L=/workspaces/.codespaces/.persistedshare/creation.log
+    for _ in $(seq 1 120); do
+      [ -f ~/.inframind-ready ] && exit 0
+      grep -q "Creating recovery container" "$L" 2>/dev/null && exit 3
+      sleep 10
+    done
+    exit 4' || rc=$?
+  case "$rc" in
+    0) log_ok >&2 "codespace setup finished" ;;
+    3) log_fail "the devcontainer failed to build; GitHub started its recovery container"
+       log_warn "  see: make codespace-ssh, then grep -i error /workspaces/.codespaces/.persistedshare/creation.log"
+       log_warn "  after fixing .devcontainer/ and pushing: gh codespace rebuild --full -c $cs"
+       exit 1 ;;
+    *) log_fail "codespace setup did not finish within 20 minutes"; exit 1 ;;
+  esac
+}
+
 remote() { # remote <codespace> <shell command>
   gh codespace ssh --codespace "$1" -- "bash -lc $(printf '%q' "$2")"
 }
@@ -81,6 +105,7 @@ remote() { # remote <codespace> <shell command>
 cmd_run() {
   local cs b args detached=0 goal
   cs="$(ensure_cs)"
+  wait_ready "$cs"
   b="$(branch)"
   warn_unsynced
   args="$(printf '%q ' "$@")"

@@ -23,6 +23,10 @@ sudo chmod +x "$BIN/kubectl"
 curl -fsSL "https://get.helm.sh/helm-${HELM_VERSION}-linux-${ARCH}.tar.gz" | tar -xz -C /tmp
 sudo mv "/tmp/linux-${ARCH}/helm" "$BIN/helm"
 
+# bookworm's python3 is 3.11; venv and headers are separate packages.
+sudo apt-get update -qq
+sudo apt-get install -y -qq python3-venv python3-dev >/dev/null
+
 python3 -m venv .venv
 # shellcheck disable=SC1091
 . .venv/bin/activate
@@ -39,4 +43,6 @@ fi
 grep -q 'inframind-core/.venv' ~/.bashrc 2>/dev/null \
   || echo '[ -f /workspaces/inframind-core/.venv/bin/activate ] && . /workspaces/inframind-core/.venv/bin/activate' >> ~/.bashrc
 
+# scripts/codespace.sh waits for this marker before running any make target.
+touch "$HOME/.inframind-ready"
 echo "[post-create] done"

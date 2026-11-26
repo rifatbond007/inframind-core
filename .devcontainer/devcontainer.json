@@ -3,7 +3,9 @@
   // kind, InfraMind and the scenarios are unchanged; only the host machine differs.
   // Drive it from the laptop with `make remote-on` (see scripts/remote.mk).
   "name": "InfraMind testbed",
-  "image": "mcr.microsoft.com/devcontainers/python:1-3.11-bookworm",
+  // Plain Debian bookworm: its python3 is 3.11 (= CI). The devcontainers/python image ships a
+  // Yarn apt repo with a missing key, which breaks apt and so the docker-in-docker feature.
+  "image": "mcr.microsoft.com/devcontainers/base:bookworm",
   "features": {
     // kind needs a Docker daemon inside the codespace.
     "ghcr.io/devcontainers/features/docker-in-docker:2": {},
